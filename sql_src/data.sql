@@ -11,6 +11,7 @@ TRUNCATE TABLE Product_Batches;
 TRUNCATE TABLE Recipe_Ingredients;
 TRUNCATE TABLE Recipe_Plans;
 TRUNCATE TABLE Ingredient_Batches;
+TRUNCATE TABLE Product_Batches;  
 TRUNCATE TABLE Formulation_Versions;
 TRUNCATE TABLE Formulations;
 TRUNCATE TABLE Supplier_Ingredients;
