@@ -23,7 +23,6 @@ TRUNCATE TABLE Suppliers;
 TRUNCATE TABLE Manufacturers;
 TRUNCATE TABLE Users;
 TRUNCATE TABLE Do_Not_Combine;
-SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================
 -- USERS
@@ -220,4 +219,7 @@ INSERT INTO Do_Not_Combine (supplier_id, ingredient1_id, ingredient2_id, reason,
 -- ============================================
 -- DATA INSERTION COMPLETE
 -- ============================================
+
+-- Re-enable foreign key checks after all inserts are complete
+SET FOREIGN_KEY_CHECKS = 1;
 

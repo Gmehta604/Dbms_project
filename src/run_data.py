@@ -71,6 +71,8 @@ def execute_sql_file(cursor, sql_file):
             
             # Skip USE statements as we're already connected to the database
             if 'USE' in statement.upper():
+                success_count += 1
+                print(f"⊘ [{i}/{len(statements)}] USE statement (skipped - already connected)")
                 continue
             
             try:
