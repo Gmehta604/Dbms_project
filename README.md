@@ -13,13 +13,15 @@ This README serves as the **owner’s manual** for the **application development
 ├── sql_src/
 │   ├── schema.sql                 # (1) All CREATE TABLE statements
 │   ├── procedures_triggers.sql    # (2) All Triggers & Stored Procedures
-│   ├── populate.sql               # (3) Sample data
+│   ├── data.sql               # (3) Sample data
 │   └── test.sql                   # (4) MASTER BUILD & TEST SCRIPT
 │
 ├── main.py                        # (To be built by App Team)
 ├── requirements.txt               # Python packages
 └── README.md                      # This file
 ```
+
+- [Phase 2 Project Plan](project_plan.md)
 
 ---
 
@@ -277,14 +279,3 @@ except mysql.connector.Error as e:
 
 ---
 
-# **✔️ Done!**
-
-Let me know if you'd like:
-
-- A prettier version with badges & logos
-- A collapsible-section version
-- A GitHub-flavored table of contents
-- Auto-generated ERD diagrams
-- ASCII art logos for your README
-
-Happy building! 🚀
