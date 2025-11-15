@@ -21,6 +21,8 @@ This README serves as the **owner’s manual** for the **application development
 └── README.md                      # This file
 ```
 
+- [Phase 2 Project Plan](docs/PHASE_2_PROJECT_PLAN.md)
+
 ---
 
 # **1. 🚀 Quick Start: Build & Test the Database**
