@@ -277,14 +277,3 @@ except mysql.connector.Error as e:
 
 ---
 
-# **✔️ Done!**
-
-Let me know if you'd like:
-
-- A prettier version with badges & logos
-- A collapsible-section version
-- A GitHub-flavored table of contents
-- Auto-generated ERD diagrams
-- ASCII art logos for your README
-
-Happy building! 🚀
