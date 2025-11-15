@@ -1,60 +1,65 @@
-````markdown
 # **Project Plan (Phase 2): From Database to Final Application**
 
 The database engine is complete, tested, and documented in `README.md`.
 
-This plan outlines the remaining tasks for the application team to build the Python CLI and prepare the final submission materials.
+This plan outlines the remaining tasks for the application team to build the Python CLI and prepare the final submission materials required by the project handout.
 
 ---
 
 ## **Task 1: Build the Python Application (CLI)**
 
-The goal: create a menu-driven Python application (`main.py`) using `mysql-connector-python` to interact with the database.
+This is the main development task. The goal is to create a menu-driven Python application (`main.py`) that uses the `mysql-connector-python` package (from `requirements.txt`) to interact with the database.
+
+---
 
 ### **1.1. Build the Main Shell & Connection**
-- Create `main.py` (already done in scaffold)
-- Implement Login Screen (already done)
-- Implement Role Selection Menu (already done)
+
+- Create `main.py` (already done in scaffold)  
+- Implement the Login Screen (already done)  
+- Implement the Role Selection Menu (already done)
 
 ---
 
-### **1.2. Implement the “Simple” Functions**
+### **1.2. Implement the "Simple" Functions**
 
-These rely on **simple SELECT/INSERT** queries and on **triggers handling the heavy lifting**.
+These functions are simple `SELECT` or `INSERT` operations that rely on triggers for validation and logic.  
+Assigned to: **Teammate 3**
 
 #### **Supplier Menu (role = 'Supplier')**
-- **Manage Ingredients Supplied:** UI for INSERT/UPDATE on `Formulation`
-- **Create Ingredient Batch:** UI for INSERT into `IngredientBatch`  
-  *(Triggers handle lot number, validation, inventory logic.)*
+- **Manage Ingredients Supplied** — UI for INSERT/UPDATE on `Formulation`
+- **Create Ingredient Batch** — UI for INSERT into `IngredientBatch`  
+  *(Triggers auto-handle lot numbers, expiration validation, inventory updates.)*
 
 #### **Manufacturer Menu (role = 'Manufacturer')**
-- **Create & Manage Product Types:** INSERT/UPDATE on `Product`
-- **Create & Update Recipe Plans:** INSERT on `Recipe` and `RecipeIngredient`
+- **Create & Manage Product Types** — INSERT/UPDATE on `Product`
+- **Create & Update Recipe Plans** — INSERT on `Recipe` and `RecipeIngredient`
 
 #### **Viewer Menu (role = 'Viewer')**
-- **Browse Product Types:** SELECT join on `Product`, `Category`, `Manufacturer`
-- **Generate Ingredient List:** complex SELECT (see `README.md`)
+- **Browse Product Types** — SELECT joining `Product`, `Category`, `Manufacturer`
+- **Generate Ingredient List** — complex SELECT (see `README.md`)
 
 ---
 
-### **1.3. Implement the “Boss Level” Function**
-#### **Create Product Batch (for Manufacturer role)**  
-This is the most complex workflow — *assigned to Teammate 1.*
+### **1.3. Implement the "Boss Level" Function**
 
-Your `README.md` (Section 3) contains the 7-step process.
+#### **Create Product Batch**  
+This is the most complex workflow.  
+Assigned to **Teammate 1**.
 
-The `main.py` scaffold already has **~90%** of the logic.
-
----
-
-## **Task 2: Implement the 5 Required Queries**  
-*(Assigned to Teammate 2 — lives inside `run_manufacturer_reports()`)*
-
-Starter SQL for each required query:
+The exact 7-step plan is documented in `README.md` (Section 3).  
+The scaffold for `main.py` already contains ~90% of this logic.
 
 ---
 
-### **1. Last batch of product type Steak Dinner (100) from MFG001**
+## **Task 2: Implement the 5 Required Queries**
+
+Assigned to **Teammate 2** (`run_manufacturer_reports()` in `main.py`).
+
+Below is the starter SQL for each required query.
+
+---
+
+### **1. Last batch ingredients for product 100 by MFG001**
 ```sql
 SELECT
     bc.ingredient_lot_number,
@@ -71,7 +76,9 @@ LIMIT 1;
 
 ---
 
-### **2. For MFG002: suppliers they purchased from + total money spent**
+### **2. For MFG002: suppliers used + total money spent**
+
+*(“Spent” = cost of consumed goods)*
 
 ```sql
 SELECT
@@ -87,7 +94,7 @@ GROUP BY s.supplier_id, s.name;
 
 ---
 
-### **3. Unit cost of product lot 100-MFG001-B0901**
+### **3. Unit cost for product lot 100-MFG001-B0901**
 
 ```sql
 SELECT
@@ -100,12 +107,14 @@ WHERE lot_number = '100-MFG001-B0901';
 
 ### **4. Ingredients that cannot be included (health-risk conflicts)**
 
-This uses the logic from `Evaluate_Health_Risk`:
+Uses logic from `Evaluate_Health_Risk`.
 
 ```sql
 CREATE TEMPORARY TABLE Temp_Atoms_In_Batch AS (
-    -- Populate with all atomic ingredients in lot '100-MFG001-B0901'
-    -- ... (flattening logic from Evaluate_Health_Risk)
+    -- Query for all atomic ingredients in '100-MFG001-B0901'
+    -- ...
+    -- Query for all flattened atomic materials from compound ingredients
+    -- ...
 );
 
 SELECT
@@ -129,7 +138,7 @@ WHERE i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch);
 
 ---
 
-### **5. Manufacturers that supplier James Miller (21) has *not* supplied**
+### **5. Manufacturers *not* supplied by James Miller (supplier 21)**
 
 ```sql
 SELECT m.manufacturer_id, m.name
@@ -145,65 +154,62 @@ WHERE m.manufacturer_id NOT IN (
 
 ---
 
-## **Task 3: Final Report (35% of Grade)**
+## **Task 3: The Final Report (35% of Grade)**
 
-*(Assigned to Person 1 / DBA)*
-
-Required components:
+This is a critical deliverable.
+Assigned to: **Person 1 (DBA / You)**
 
 ### **Updated ER Model**
 
-Create a full visual diagram of the final schema.
+Create a complete visual diagram of the database schema.
 
 ### **Functional Dependencies**
 
-Use `normalization_report.md` — already includes this.
+Use `normalization_report.md` (already contains the analysis).
 
 ### **Normalization Analysis**
 
-`normalization_report.md` demonstrates BCNF.
+`normalization_report.md` demonstrates BCNF compliance.
 
 ### **Constraints Analysis**
 
-Explain why some logic belongs in the DB and some in the application.
+#### **Database-Level Constraints (Trigers, PK/FK, Checks)**
 
-#### **Constraints in the Database**
+* **Foreign Keys** → enforce referential integrity
+* **PK / UNIQUE / NOT NULL** → enforce identity & completeness
+* **Lot Number Trigger** → ensures consistent lot-number formatting
+* **Expiration Check Trigger** → blocks use of expired ingredients
+* **Quantity Validation Trigger** → prevents negative inventory
+* **Health Risk Check (Evaluate_Health_Risk)** → enforces safety constraints transactionally
 
-* **Foreign Keys** → Referential integrity
-* **Primary Key / UNIQUE / NOT NULL** → Data integrity
-* **Lot Number Trigger** → Ensures consistent lot-number format
-* **Expiration Check Trigger** → Prevents consuming expired goods
-* **Quantity Validation Trigger** → Prevents negative inventory
-* **Evaluate_Health_Risk** → Critical business rule enforced transactionally
+#### **Application-Level Constraints (Python)**
 
-#### **Constraints in the Application**
-
-* **FEFO logic** → Procedural, easiest in Python
-* **Batch size multiple check** → UI validation (not a DB rule)
+* **FEFO selection** → procedural logic that fits better in Python
+* **Batch size multiple rule** → UI validation for user feedback
 
 ---
 
-## **Task 4: Suggested Team Work Split**
+## **Task 4: Suggested Team Work Split (“War Plan”)**
 
 ### **Person 1 (DBA / You)**
 
-* Lead author of Final Report
-* Assist debugging Python (procedure calls, error handling)
+* Lead author of the Final Report
+* Assist debugging Python (procedures, try/except)
 
 ### **Person 2 (App Lead — Manufacturer Role)**
 
-* Implement Create Product Batch workflow (Section 1.3)
+* Implement **Create Product Batch** workflow (Section 1.3)
 
-### **Person 3 (App Lead — Supplier / Viewer Roles)**
+### **Person 3 (App Lead — Supplier/Viewer Roles)**
 
-* Implement Main Shell (Login, Menus)
-* Implement all “Simple” functions
-  *(All stubs except `create_product_batch` and `run_manufacturer_reports`)*
+* Implement main shell (Login, Menus)
+* Implement all “Simple” functions (Section 1.2)
+  *(Except `create_product_batch` and `run_manufacturer_reports`)*
 
 ### **Person 4 (Query & Report Lead)**
 
-* Implement the 5 Required Queries (Section 2)
+* Implement the 5 Required Queries
 * Create final ER Diagram
-* Prepare demo script
+* Prepare the demo script
 
 ---
