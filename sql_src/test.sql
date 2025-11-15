@@ -70,3 +70,55 @@ VALUES
 
 -- EXPECTED OUTPUT FOR TEST 2:
 -- ERROR 1062 (23000): Duplicate entry '101-20-B-12345-TEST' for key 'IngredientBatch.PRIMARY'
+
+-- =====================================================================
+-- TEST FOR: trg_prevent_expired_consumption
+-- =====================================================================
+
+SELECT 'TESTING: Trigger for preventing expired consumption' AS test_name;
+
+-- ---------------------------------------------------------------------
+-- Test 1: (Happy Path) Consume a NON-expired lot.
+-- This INSERT should SUCCEED.
+-- ---------------------------------------------------------------------
+
+-- ACTION:
+-- We'll consume lot '101-20-B0003', which expires '2025-12-15'.
+-- (Assuming CURDATE() is before that, e.g., '2025-11-15')
+-- We'll consume it for Product Batch '100-MFG001-B0901'.
+INSERT INTO BatchConsumption
+  (product_lot_number, ingredient_lot_number, quantity_consumed)
+VALUES
+  ('100-MFG001-B0901', '101-20-B0003', 10.0);
+
+-- CHECK:
+-- Let's see if the row was successfully added.
+SELECT * FROM BatchConsumption WHERE ingredient_lot_number = '101-20-B0003';
+
+-- EXPECTED OUTPUT FOR TEST 1:
+-- (A row is successfully returned)
+
+
+-- ---------------------------------------------------------------------
+-- Test 2: (Sad Path) Consume an EXPIRED lot.
+-- This INSERT should FAIL.
+-- It is commented out so test suite can continue
+-- ---------------------------------------------------------------------
+
+-- SELECT 'TESTING: Uniqueness constraint for lot_number' AS test_name;
+
+-- ACTION:
+-- We'll try to consume lot '101-21-B0001', which expired on '2025-10-30'.
+-- (Assuming CURDATE() is after that, e.g., '2025-11-15')
+-- The trigger should fire and block this INSERT.
+-- INSERT INTO BatchConsumption
+--   (product_lot_number, ingredient_lot_number, quantity_consumed)
+-- VALUES
+--   ('100-MFG001-B0901', '101-21-B0001', 5.0);
+
+-- CHECK:
+-- This test PASSES if the command above prints our custom error message.
+-- If this INSERT *succeeds*, your test has FAILED.
+
+-- EXPECTED OUTPUT FOR TEST 2:
+-- ERROR 1644 (45000): ERROR: Cannot consume an expired ingredient lot! Lot has expired.

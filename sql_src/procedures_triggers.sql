@@ -55,6 +55,32 @@ BEGIN
     NEW.manufacturer_batch_id
   );
 END;
+
+DROP TRIGGER IF EXISTS trg_prevent_expired_consumption;
+
+CREATE TRIGGER trg_prevent_expired_consumption
+-- Fire *before* a consumption record is saved
+BEFORE INSERT ON BatchConsumption
+FOR EACH ROW
+BEGIN
+    -- 1. Create a variable to hold the expiration date
+    DECLARE v_expiration_date DATE;
+
+    -- 2. Look up the expiration date from the IngredientBatch table
+    --    for the *specific lot* we are trying to consume
+    SELECT expiration_date INTO v_expiration_date
+    FROM IngredientBatch
+    WHERE lot_number = NEW.ingredient_lot_number;
+
+    -- 3. Check if the current date is *after* the expiration date.
+    --    CURDATE() gets today's date (e.g., '2025-11-15')
+    IF CURDATE() > v_expiration_date THEN
+        -- 4. If it is expired, stop the INSERT and throw a custom error.
+        --    '45000' is the standard "user-defined error" state.
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'ERROR: Cannot consume an expired ingredient lot! Lot has expired.';
+    END IF;
+END;
 //
 
 DELIMITER ;
