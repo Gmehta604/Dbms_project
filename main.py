@@ -2,16 +2,26 @@ import mysql.connector
 import getpass
 import json
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 # --- Database Configuration ---
-# NOTE: Your teammates might need to change this if their
-# local MySQL user/password is different.
 DB_CONFIG = {
     'user': 'root',
     'host': '127.0.0.1',
     'database': 'Meal_Manufacturer'
 }
+
+# --- Helper Functions ---
+def pretty_print_results(cursor, headers):
+    """Helper function to print query results in a nice table."""
+    results = cursor.fetchall()
+    if not results:
+        print("No results found.")
+        return
+    
+    # Use tabulate or a simple manual format
+    from tabulate import tabulate
+    print(tabulate(results, headers=headers, tablefmt="grid"))
 
 # --- Main Application ---
 
@@ -22,10 +32,8 @@ def login(cursor):
     """
     print("--- Login ---")
     username = input("Username: ")
-    # Use getpass for secure password entry
     password = getpass.getpass("Password: ") 
 
-    # We query for the password (in a real app, this would be a hash)
     query = """
         SELECT role, manufacturer_id, supplier_id 
         FROM AppUser 
@@ -36,8 +44,11 @@ def login(cursor):
         result = cursor.fetchone()
 
         if result:
-            role, man_id, sup_id = result
+            role = result.get('role')
+            man_id = result.get('manufacturer_id')
+            sup_id = result.get('supplier_id')
             user_id = man_id if role == 'Manufacturer' else sup_id
+            
             print(f"\nLogin successful. Welcome, {username} (Role: {role})")
             return {
                 "username": username,
@@ -56,67 +67,121 @@ def login(cursor):
 # =====================================================================
 
 def create_product_type(cursor, db, user_session):
-    """(Teammate 3's Task) - Simple INSERT"""
+    """(SIMPLE FUNCTION) - Creates a new product type."""
     print("\n--- (1) Create & Manage Product Types ---")
-    # 1. Get input (name, category_id, standard_batch_size)
-    # 2. Run a simple INSERT into the `Product` table.
-    #    (Don't forget to include user_session['id'] as the manufacturer_id)
-    # 3. Call db.commit()
-    print("Function not yet implemented.")
-    pass
+    try:
+        product_id = input("Enter new Product ID (e.g., 102): ")
+        name = input("Enter Product Name (e.g., 'Chicken Soup'): ")
+        category_id = input("Enter Category ID (e.g., '2' for Dinners): ")
+        sbs = int(input("Enter Standard Batch Size (e.g., 150): "))
+        manufacturer_id = user_session['id']
+
+        query = """
+            INSERT INTO Product 
+              (product_id, name, category_id, manufacturer_id, standard_batch_size)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(query, (product_id, name, category_id, manufacturer_id, sbs))
+        db.commit()
+        print(f"Success! Product '{name}' created.")
+
+    except mysql.connector.Error as err:
+        db.rollback()
+        print(f"Error: {err.msg}")
+    except ValueError:
+        print("Error: Standard batch size must be an integer.")
 
 def create_recipe_plan(cursor, db, user_session):
-    """(Teammate 3's Task) - Simple INSERT"""
+    """(SIMPLE FUNCTION) - Creates a new (versioned) recipe."""
     print("\n--- (2) Create & Update Recipe Plans (Versioned) ---")
-    # 1. Get input (product_id, recipe_name e.g., "v2-low-sodium")
-    # 2. INSERT into `Recipe` table.
-    # 3. Get the new 'recipe_id' (cursor.lastrowid)
-    # 4. Loop:
-    #    a. Get input (ingredient_id, quantity, unit)
-    #    b. INSERT into `RecipeIngredient` table using the new recipe_id.
-    #    c. Ask user "Add another ingredient? (y/n)"
-    # 5. Call db.commit()
-    print("Function not yet implemented.")
-    pass
+    try:
+        product_id = input("Enter Product ID to create a recipe for (e.g., 100): ")
+        recipe_name = input("Enter new Recipe Name (e.g., 'v2-low-sodium'): ")
+        
+        # 1. Create the 'parent' Recipe row
+        query_recipe = """
+            INSERT INTO Recipe (product_id, name, creation_date, is_active)
+            VALUES (%s, %s, %s, %s)
+        """
+        # (We could also have logic to set other recipes for this product to is_active=0)
+        cursor.execute(query_recipe, (product_id, recipe_name, date.today(), 1))
+        recipe_id = cursor.lastrowid # Get the new PK we just created
+        print(f"Created new recipe with ID: {recipe_id}")
+
+        # 2. Loop and add ingredients
+        while True:
+            print("\nAdd an ingredient to the recipe (or type 'done' to finish):")
+            ing_id = input("  Ingredient ID (e.g., 101): ")
+            if ing_id.lower() == 'done':
+                break
+            
+            qty = float(input("  Quantity (oz) (e.g., 0.5): "))
+            unit = input("  Unit (e.g., 'oz'): ")
+
+            query_ing = """
+                INSERT INTO RecipeIngredient (recipe_id, ingredient_id, quantity, unit_of_measure)
+                VALUES (%s, %s, %s, %s)
+            """
+            cursor.execute(query_ing, (recipe_id, ing_id, qty, unit))
+            print(f"Added ingredient {ing_id}.")
+        
+        db.commit()
+        print(f"\nSuccess! Recipe '{recipe_name}' (ID: {recipe_id}) created.")
+        
+    except mysql.connector.Error as err:
+        db.rollback()
+        print(f"Error: {err.msg}")
+    except ValueError:
+        db.rollback()
+        print("Error: Quantity must be a number.")
 
 def create_product_batch(cursor, db, user_session):
-    """(Teammate 1's Task) - THIS IS THE BOSS LEVEL FUNCTION"""
+    """(BOSS LEVEL FUNCTION) - This is the most complex workflow."""
     print("\n--- (3) Create Product Batch (Production Posting) ---")
-    
-    # This is the most complex *Python* task.
-    # Your goal is to build the JSON string to pass to the Stored Procedure.
-    # Follow the 7-step plan from README.md!
     
     try:
         # --- Step 1: Get Input ---
-        product_id = input("Enter Product ID: ") # e.g., '100'
-        produced_quantity = int(input("Enter Production Quantity: ")) # e.g., 100
-        # ... get other inputs like manufacturer_batch_id, expiration_date
-
+        product_id = input("Enter Product ID to manufacture (e.g., 100): ")
+        produced_quantity = int(input("Enter Production Quantity (e.g., 100): "))
+        manufacturer_batch_id = input("Enter new Manufacturer Batch ID (e.g., B0902): ")
+        exp_date_str = input("Enter Expiration Date (YYYY-MM-DD): ")
+        
         # --- Step 2: Validate Quantity (Python Check) ---
-        cursor.execute("SELECT standard_batch_size FROM Product WHERE product_id = %s", (product_id,))
-        sbs = cursor.fetchone()[0]
+        cursor.execute("SELECT standard_batch_size FROM Product WHERE product_id = %s AND manufacturer_id = %s", 
+                       (product_id, user_session['id']))
+        sbs_result = cursor.fetchone()
+        if not sbs_result:
+            print(f"Error: You do not own Product ID {product_id}.")
+            return
+            
+        sbs = sbs_result['standard_batch_size']
         if produced_quantity % sbs != 0:
-            print(f"Error: Quantity must be a multiple of {sbs}.")
+            print(f"Error: Quantity ({produced_quantity}) must be a multiple of the standard batch size ({sbs}).")
             return
 
-        # --- Step 3: Get Recipe ---
-        # (Assuming we use the *active* recipe)
-        cursor.execute("SELECT recipe_id FROM Recipe WHERE product_id = %s AND is_active = 1", (product_id,))
-        recipe_id_used = cursor.fetchone()[0]
+        # --- Step 3: Get Active Recipe ---
+        cursor.execute("SELECT recipe_id FROM Recipe WHERE product_id = %s AND is_active = 1 LIMIT 1", (product_id,))
+        recipe_result = cursor.fetchone()
+        if not recipe_result:
+            print(f"Error: No active recipe found for Product ID {product_id}.")
+            return
+        
+        recipe_id_used = recipe_result['recipe_id']
         
         cursor.execute("SELECT ingredient_id, quantity FROM RecipeIngredient WHERE recipe_id = %s", (recipe_id_used,))
-        recipe_ingredients = cursor.fetchall() # e.g., [('106', 6.0), ('201', 0.2)]
+        recipe_ingredients = cursor.fetchall()
 
         # --- Step 4 & 5: Calculate Totals & Run FEFO Logic ---
         print("Calculating inventory requirements...")
         consumption_plan = [] # This will become our JSON
         
-        for ing_id, qty_per_unit in recipe_ingredients:
+        for ingredient in recipe_ingredients:
+            ing_id = ingredient['ingredient_id']
+            qty_per_unit = ingredient['quantity']
+            
             total_needed = qty_per_unit * produced_quantity
             print(f"Need {total_needed} oz of ingredient {ing_id}...")
             
-            # This is the FEFO (First-Expired, First-Out) query
             fefo_query = """
                 SELECT lot_number, quantity_on_hand 
                 FROM IngredientBatch 
@@ -128,8 +193,16 @@ def create_product_batch(cursor, db, user_session):
             cursor.execute(fefo_query, (ing_id,))
             available_lots = cursor.fetchall()
             
+            if not available_lots:
+                print(f"*** CRITICAL ERROR: No available stock for ingredient {ing_id}! ***")
+                print("Batch creation cancelled.")
+                return
+
             # --- This is the core FEFO loop ---
-            for lot_number, lot_qty in available_lots:
+            for lot in available_lots:
+                lot_number = lot['lot_number']
+                lot_qty = lot['quantity_on_hand']
+
                 if total_needed <= 0:
                     break # We have enough of this ingredient
                 
@@ -139,7 +212,7 @@ def create_product_batch(cursor, db, user_session):
             
             if total_needed > 0:
                 print(f"*** CRITICAL ERROR: Not enough stock for ingredient {ing_id}! ***")
-                print(f"Still need {total_needed} oz.")
+                print(f"Only found {qty_per_unit * produced_quantity - total_needed} oz, but still need {total_needed} oz.")
                 print("Batch creation cancelled.")
                 return
 
@@ -148,7 +221,7 @@ def create_product_batch(cursor, db, user_session):
         print("\nConsumption Plan (JSON):")
         print(json_string)
         
-        if input("Do you want to proceed with this batch? (y/n): ") != 'y':
+        if input("Do you want to proceed with this batch? (y/n): ").lower() != 'y':
             print("Batch creation cancelled.")
             return
 
@@ -157,9 +230,9 @@ def create_product_batch(cursor, db, user_session):
         args = (
             product_id,
             user_session['id'],
-            input("Enter new Manufacturer Batch ID (e.g., B0902): "),
+            manufacturer_batch_id,
             produced_quantity,
-            input("Enter Expiration Date (YYYY-MM-DD): "),
+            exp_date_str,
             recipe_id_used,
             json_string
         )
@@ -177,13 +250,10 @@ def create_product_batch(cursor, db, user_session):
         db.rollback()
         print(f"An unexpected error occurred: {e}")
 
-    pass
-
 def run_manufacturer_reports(cursor, user_session):
-    """(Teammate 2's Task) - Run the 5 Required Queries"""
+    """(REPORTING FUNCTION) - Runs the 5 required queries."""
     print("\n--- (5) Run Reports ---")
     
-    # Create a sub-menu for the 5 queries
     print("1. Ingredients of last 'Steak Dinner' batch (MFG001)")
     print("2. Suppliers and spending (MFG002)")
     print("3. Unit cost for lot '100-MFG001-B0901'")
@@ -192,43 +262,156 @@ def run_manufacturer_reports(cursor, user_session):
     
     choice = input("Select a report (1-5): ")
     
-    if choice == '1':
-        # --- Query 1 ---
-        # The SQL is already written in project_plan.md
-        # 1. Define the SQL query string
-        # 2. cursor.execute(query)
-        # 3. results = cursor.fetchall()
-        # 4. Pretty-print the results
-        print("Running Query 1...")
-        query1 = """
-            SELECT
-                bc.ingredient_lot_number,
-                i.name
-            FROM ProductBatch pb
-            JOIN BatchConsumption bc ON pb.lot_number = bc.product_lot_number
-            JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
-            JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
-            WHERE
-                pb.product_id = '100'
-                AND pb.manufacturer_id = 'MFG001'
-            ORDER BY
-                pb.production_date DESC
-            LIMIT 1;
-        """
-        cursor.execute(query1)
-        for row in cursor.fetchall():
-            print(row)
+    try:
+        if choice == '1':
+            print("Report 1: Last batch of Steak Dinner (100) by MFG001")
+            query1 = """
+                SELECT
+                    bc.ingredient_lot_number,
+                    i.name,
+                    pb.production_date
+                FROM ProductBatch pb
+                JOIN BatchConsumption bc ON pb.lot_number = bc.product_lot_number
+                JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+                JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
+                WHERE
+                    pb.product_id = '100'
+                    AND pb.manufacturer_id = 'MFG001'
+                ORDER BY
+                    pb.production_date DESC
+                LIMIT 1;
+            """
+            cursor.execute(query1)
+            pretty_print_results(cursor, ["Ingredient Lot", "Ingredient Name", "Production Date"])
 
-    elif choice == '2':
-        # --- Query 2 ---
-        print("Running Query 2...")
-        # (Paste SQL from project_plan.md here)
+        elif choice == '2':
+            print("Report 2: Total spending by MFG002, by supplier")
+            query2 = """
+                SELECT
+                    s.name AS supplier_name,
+                    SUM(bc.quantity_consumed * ib.per_unit_cost) AS total_spent
+                FROM
+                    BatchConsumption bc
+                JOIN
+                    ProductBatch pb ON bc.product_lot_number = pb.lot_number
+                JOIN
+                    IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+                JOIN
+                    Supplier s ON ib.supplier_id = s.supplier_id
+                WHERE
+                    pb.manufacturer_id = 'MFG002'
+                GROUP BY
+                    s.supplier_id, s.name;
+            """
+            cursor.execute(query2)
+            pretty_print_results(cursor, ["Supplier", "Total Spent ($)"])
+
+        elif choice == '3':
+            print("Report 3: Unit cost for lot '100-MFG001-B0901'")
+            query3 = """
+                SELECT
+                    (total_batch_cost / produced_quantity) AS unit_cost
+                FROM
+                    ProductBatch
+                WHERE
+                    lot_number = '100-MFG001-B0901';
+            """
+            cursor.execute(query3)
+            pretty_print_results(cursor, ["Unit Cost ($)"])
+
+        elif choice == '4':
+            print("Report 4: Conflicting ingredients for lot '100-MFG001-B0901'")
+            # This is the hardest query. We must re-create the "flattening" logic.
+            
+            # 1. Create a temporary table for this session
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch (
+                    ingredient_id VARCHAR(20) PRIMARY KEY
+                );
+            """)
+            cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch;")
+            
+            # 2. Get all ATOMIC ingredients from the lot
+            cursor.execute("""
+                INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
+                SELECT ib.ingredient_id
+                FROM BatchConsumption bc
+                JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+                JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
+                WHERE bc.product_lot_number = '100-MFG001-B0901'
+                  AND i.ingredient_type = 'ATOMIC';
+            """)
+            
+            # 3. Get all FLATTENED atomic ingredients from COMPOUND lots
+            cursor.execute("""
+                INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
+                SELECT fm.material_ingredient_id
+                FROM BatchConsumption bc
+                JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+                JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
+                JOIN Formulation f ON f.ingredient_id = ib.ingredient_id 
+                                   AND f.supplier_id = ib.supplier_id
+                                   AND ib.intake_date BETWEEN f.valid_from_date AND COALESCE(f.valid_to_date, '9999-12-31')
+                JOIN FormulationMaterials fm ON fm.formulation_id = f.formulation_id
+                WHERE bc.product_lot_number = '100-MFG001-B0901'
+                  AND i.ingredient_type = 'COMPOUND';
+            """)
+            
+            # 4. Now, find all ingredients in the DB that conflict with this list
+            query4 = """
+                SELECT
+                    i.ingredient_id,
+                    i.name AS conflicting_ingredient
+                FROM
+                    Ingredient i
+                JOIN
+                    DoNotCombine dnc ON i.ingredient_id = dnc.ingredient_a_id
+                JOIN
+                    Temp_Atoms_In_Batch t ON dnc.ingredient_b_id = t.ingredient_id
+                WHERE
+                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch)
+                UNION
+                SELECT
+                    i.ingredient_id,
+                    i.name AS conflicting_ingredient
+                FROM
+                    Ingredient i
+                JOIN
+                    DoNotCombine dnc ON i.ingredient_id = dnc.ingredient_b_id
+                JOIN
+                    Temp_Atoms_In_Batch t ON dnc.ingredient_a_id = t.ingredient_id
+                WHERE
+                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch);
+            """
+            cursor.execute(query4)
+            pretty_print_results(cursor, ["Conflicting ID", "Conflicting Ingredient Name"])
+
+        elif choice == '5':
+            print("Report 5: Manufacturers not supplied by 'James Miller' (21)")
+            query5 = """
+                SELECT m.manufacturer_id, m.name
+                FROM Manufacturer m
+                WHERE m.manufacturer_id NOT IN (
+                    SELECT DISTINCT
+                        pb.manufacturer_id
+                    FROM
+                        BatchConsumption bc
+                    JOIN
+                        IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+                    JOIN
+                        ProductBatch pb ON bc.product_lot_number = pb.lot_number
+                    WHERE
+                        ib.supplier_id = '21'
+                );
+            """
+            cursor.execute(query5)
+            pretty_print_results(cursor, ["Manufacturer ID", "Manufacturer Name"])
+            
+        else:
+            print("Invalid choice.")
     
-    # ... Add elif for 3, 4, and 5 ...
-    
-    else:
-        print("Invalid choice.")
-    pass
+    except mysql.connector.Error as err:
+        print(f"Report Error: {err.msg}")
 
 def manufacturer_menu(cursor, db, user_session):
     """Main menu loop for the Manufacturer role."""
@@ -237,9 +420,8 @@ def manufacturer_menu(cursor, db, user_session):
         print("1. Create/Update Product Type")
         print("2. Create/Update Recipe Plan")
         print("3. Create Product Batch (Production Posting)")
-        print("4. (View Reports - see 5)")
-        print("5. Run Reports (Required Queries)")
-        print("6. Exit")
+        print("4. Run Reports (Required Queries)")
+        print("5. Exit")
         choice = input("Enter choice: ")
 
         if choice == '1':
@@ -248,9 +430,9 @@ def manufacturer_menu(cursor, db, user_session):
             create_recipe_plan(cursor, db, user_session)
         elif choice == '3':
             create_product_batch(cursor, db, user_session)
-        elif choice == '5':
+        elif choice == '4.':
             run_manufacturer_reports(cursor, user_session)
-        elif choice == '6':
+        elif choice == '5':
             break
         else:
             print("Invalid choice.")
@@ -260,65 +442,157 @@ def manufacturer_menu(cursor, db, user_session):
 # =====================================================================
 
 def create_supplier_batch(cursor, db, user_session):
-    """(Teammate 3's Task) - Simple INSERT with 90-day check"""
+    """(SIMPLE FUNCTION) - Creates a new ingredient batch."""
     print("\n--- (3) Create Ingredient Batch (Lot Intake) ---")
-    # 1. Get input: ingredient_id, supplier_batch_id, quantity, cost, expiration_date
-    # 2. Get today's date: intake_date = date.today()
-    # 3. Python Check (90-day rule):
-    #    if (expiration_date - intake_date).days < 90:
-    #       print("Error: Expiration date must be at least 90 days out.")
-    #       return
-    # 4. Run INSERT into `IngredientBatch` table.
-    #    (The triggers will do all the work!)
-    # 5. Call db.commit()
-    print("Function not yet implemented.")
-    pass
+    try:
+        ingredient_id = input("Enter Ingredient ID: ")
+        
+        # Access Control Check: Does this supplier actually supply this ingredient?
+        cursor.execute("SELECT 1 FROM Formulation WHERE supplier_id = %s AND ingredient_id = %s", 
+                       (user_session['id'], ingredient_id))
+        if not cursor.fetchone():
+            print(f"Error: You are not authorized to supply ingredient {ingredient_id}.")
+            return
+            
+        supplier_batch_id = input("Enter Supplier's Batch ID (e.g., B0010): ")
+        quantity = float(input("Enter Quantity (oz): "))
+        cost = float(input("Enter Per-Unit Cost (e.g., 0.10): "))
+        exp_date_str = input("Enter Expiration Date (YYYY-MM-DD): ")
+        
+        # Python Check (90-day rule):
+        intake_date = date.today()
+        expiration_date = date.fromisoformat(exp_date_str)
+        if (expiration_date - intake_date).days < 90:
+           print(f"Error: Expiration date ({exp_date_str}) must be at least 90 days from today ({intake_date}).")
+           return
+           
+        query = """
+            INSERT INTO IngredientBatch 
+              (ingredient_id, supplier_id, supplier_batch_id, 
+               quantity_on_hand, per_unit_cost, expiration_date, intake_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(query, (ingredient_id, user_session['id'], supplier_batch_id, 
+                               quantity, cost, exp_date_str, intake_date))
+        
+        db.commit()
+        print("\n*** SUCCESS: Ingredient batch created! ***")
+        # The trigger 'trg_compute_ingredient_lot_number' automatically built the lot_number.
+
+    except mysql.connector.Error as err:
+        db.rollback()
+        print(f"Error: {err.msg}")
+    except ValueError:
+        db.rollback()
+        print("Error: Invalid input. Quantity/Cost must be numbers. Date must be YYYY-MM-DD.")
 
 def supplier_menu(cursor, db, user_session):
-    """(Teammate 3's Task)"""
+    """(SIMPLE FUNCTIONS) - Menu for Supplier role."""
     while True:
         print("\n--- Supplier Menu ---")
-        print("1. Manage Ingredients Supplied")
-        print("2. Define/Update Ingredient (Formulation)")
+        print("1. Manage Ingredients Supplied (Formulations)")
+        print("2. Define Ingredient Materials (For Compound)")
         print("3. Create Ingredient Batch (Lot Intake)")
         print("4. Exit")
         choice = input("Enter choice: ")
 
         if choice == '1':
             # (UI for INSERT/UPDATE on Formulation table)
-            print("Function not yet implemented.")
+            print("Function not yet implemented. (Simple INSERT into Formulation)")
         elif choice == '2':
             # (UI for INSERT/UPDATE on FormulationMaterials)
-            print("Function not yet implemented.")
-        elif choice == '3.':
+            print("Function not yet implemented. (Simple INSERT into FormulationMaterials)")
+        elif choice == '3':
             create_supplier_batch(cursor, db, user_session)
         elif choice == '4':
             break
         else:
             print("Invalid choice.")
-    pass
 
 # =====================================================================
 # --- VIEWER MENU ---
 # =====================================================================
 
 def generate_ingredient_list(cursor, user_session):
-    """(Teammate 3's Task) - Complex SELECT"""
-    print("\n--- (1) Generate Ingredient List ---")
-    # This is a complex SELECT query.
-    # 1. Get product_id from user.
-    # 2. Find the *active* recipe_id.
-    # 3. Get all ingredients from `RecipeIngredient`.
-    # 4. For each ingredient, if it's 'COMPOUND':
-    #    a. Find its *active* formulation.
-    #    b. Find its `FormulationMaterials`.
-    # 5. Combine this "flattened" list, SUM quantities, and
-    #    ORDER BY quantity DESC.
-    print("Function not yet implemented.")
-    pass
+    """(SIMPLE FUNCTION) - Complex SELECT query."""
+    print("\n--- (2) Generate Ingredient List (Flattened) ---")
+    
+    try:
+        product_id = input("Enter Product ID (e.g., 100): ")
+        
+        # This query is a simplified version of the health risk one.
+        # It finds the active recipe, then unnests compound ingredients.
+        
+        # 1. Get active recipe
+        cursor.execute("SELECT recipe_id FROM Recipe WHERE product_id = %s AND is_active = 1 LIMIT 1", (product_id,))
+        recipe_result = cursor.fetchone()
+        if not recipe_result:
+            print(f"Error: No active recipe found for Product ID {product_id}.")
+            return
+        
+        recipe_id = recipe_result['recipe_id']
+
+        # 2. Get all ATOMIC ingredients from the recipe
+        query_atomic = """
+            SELECT i.name, ri.quantity
+            FROM RecipeIngredient ri
+            JOIN Ingredient i ON ri.ingredient_id = i.ingredient_id
+            WHERE ri.recipe_id = %s AND i.ingredient_type = 'ATOMIC'
+        """
+        
+        # 3. Get all FLATTENED materials from COMPOUND ingredients
+        # Note: This is complex. It assumes the *first* valid formulation.
+        # A more robust solution would be needed for multiple suppliers.
+        query_compound = """
+            SELECT 
+                i_mat.name, 
+                (ri.quantity * fm.quantity) AS total_quantity
+            FROM 
+                RecipeIngredient ri
+            JOIN 
+                Ingredient i_comp ON ri.ingredient_id = i_comp.ingredient_id
+            JOIN 
+                Formulation f ON f.ingredient_id = i_comp.ingredient_id
+            JOIN 
+                FormulationMaterials fm ON fm.formulation_id = f.formulation_id
+            JOIN 
+                Ingredient i_mat ON fm.material_ingredient_id = i_mat.ingredient_id
+            WHERE 
+                ri.recipe_id = %s 
+                AND i_comp.ingredient_type = 'COMPOUND'
+                AND f.valid_from_date <= CURDATE() 
+                AND COALESCE(f.valid_to_date, '9999-12-31') >= CURDATE()
+        """
+        
+        cursor.execute(query_atomic, (recipe_id,))
+        ingredients = cursor.fetchall()
+        
+        cursor.execute(query_compound, (recipe_id,))
+        ingredients.extend(cursor.fetchall())
+        
+        # We need to sum duplicates in Python
+        final_list = {}
+        for item in ingredients:
+            name = item['name']
+            qty = item['quantity']
+            if name in final_list:
+                final_list[name] += qty
+            else:
+                final_list[name] = qty
+        
+        # Sort by quantity descending
+        sorted_list = sorted(final_list.items(), key=lambda x: x[1], reverse=True)
+        
+        print(f"\n--- Flattened Ingredient List for Product {product_id} ---")
+        print(tabulate(sorted_list, headers=["Ingredient", "Quantity (oz)"], tablefmt="grid"))
+
+    except mysql.connector.Error as err:
+        print(f"Error: {err.msg}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
 
 def viewer_menu(cursor, db, user_session):
-    """(Teammate 3's Task)"""
+    """(SIMPLE FUNCTIONS) - Menu for Viewer role."""
     while True:
         print("\n--- Viewer Menu ---")
         print("1. Browse Product Types")
@@ -327,15 +601,25 @@ def viewer_menu(cursor, db, user_session):
         choice = input("Enter choice: ")
 
         if choice == '1':
-            # (Simple SELECT on Product, Category, Manufacturer)
-            print("Function not yet implemented.")
+            print("\n--- All Product Types ---")
+            try:
+                query = """
+                    SELECT p.product_id, p.name, c.name AS category, m.name AS manufacturer
+                    FROM Product p
+                    JOIN Category c ON p.category_id = c.category_id
+                    JOIN Manufacturer m ON p.manufacturer_id = m.manufacturer_id
+                    ORDER BY m.name, c.name, p.name
+                """
+                cursor.execute(query)
+                pretty_print_results(cursor, ["ID", "Product Name", "Category", "Manufacturer"])
+            except mysql.connector.Error as err:
+                print(f"Error: {err.msg}")
         elif choice == '2':
             generate_ingredient_list(cursor, user_session)
         elif choice == '3':
             break
         else:
             print("Invalid choice.")
-    pass
 
 # =====================================================================
 # --- MAIN EXECUTION ---
@@ -349,7 +633,7 @@ def main():
     db = None
     try:
         # Prompt for password
-        db_pass = getpass.getpass("Enter database password: ")
+        db_pass = getpass.getpass("Enter database password (leave blank for no password): ")
         DB_CONFIG['password'] = db_pass
         
         db = mysql.connector.connect(**DB_CONFIG)
