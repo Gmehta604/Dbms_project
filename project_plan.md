@@ -157,7 +157,7 @@ WHERE m.manufacturer_id NOT IN (
 ## **Task 3: The Final Report (35% of Grade)**
 
 This is a critical deliverable.
-Assigned to: **Person 1 (DBA / You)**
+Assigned to: **Person 1**
 
 ### **Updated ER Model**
 
@@ -191,7 +191,7 @@ Use `normalization_report.md` (already contains the analysis).
 
 ## **Task 4: Suggested Team Work Split (“War Plan”)**
 
-### **Person 1 (DBA / You)**
+### **Person 1**
 
 * Lead author of the Final Report
 * Assist debugging Python (procedures, try/except)
