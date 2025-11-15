@@ -51,18 +51,18 @@ WHERE supplier_batch_id = 'B-12345-TEST';
 -- Test 2: (Uniqueness) Check if the PRIMARY KEY blocks a duplicate.
 -- ---------------------------------------------------------------------
 
-SELECT 'TESTING: Uniqueness constraint for lot_number' AS test_name;
+-- SELECT 'TESTING: Uniqueness constraint for lot_number' AS test_name;
 
--- ACTION:
--- Try to insert the *exact same* combination.
--- The trigger will try to build the *same* lot_number ('101-20-B-12345-TEST').
--- The database's PRIMARY KEY constraint should reject this INSERT.
-INSERT INTO IngredientBatch 
-  (ingredient_id, supplier_id, supplier_batch_id, 
-   quantity_on_hand, per_unit_cost, expiration_date, intake_date)
-VALUES 
-  ('101', '20', 'B-12345-TEST', 
-   50.00, 5.25, '2026-11-20', '2025-11-20');
+-- -- ACTION:
+-- -- Try to insert the *exact same* combination.
+-- -- The trigger will try to build the *same* lot_number ('101-20-B-12345-TEST').
+-- -- The database's PRIMARY KEY constraint should reject this INSERT.
+-- INSERT INTO IngredientBatch 
+--   (ingredient_id, supplier_id, supplier_batch_id, 
+--    quantity_on_hand, per_unit_cost, expiration_date, intake_date)
+-- VALUES 
+--   ('101', '20', 'B-12345-TEST', 
+--    50.00, 5.25, '2026-11-20', '2025-11-20');
 
 -- CHECK:
 -- This test PASSES if this command prints a "Duplicate entry" ERROR.
@@ -122,3 +122,87 @@ SELECT * FROM BatchConsumption WHERE ingredient_lot_number = '101-20-B0003';
 
 -- EXPECTED OUTPUT FOR TEST 2:
 -- ERROR 1644 (45000): ERROR: Cannot consume an expired ingredient lot! Lot has expired.
+
+-- =====================================================================
+-- TEST FOR: Master Validation & Maintain On-Hand Triggers
+-- =====================================================================
+-- SELECT 'TESTING: Master Validation and Maintain On-Hand Triggers' AS test_name;
+
+-- -- ---------------------------------------------------------------------
+-- -- SETUP: We need an ingredient lot that we *know* is expired.
+-- -- The data in populate.sql is valid, so we'll create our own bad data.
+-- -- ---------------------------------------------------------------------
+-- INSERT INTO IngredientBatch 
+--   (ingredient_id, supplier_id, supplier_batch_id, 
+--    quantity_on_hand, per_unit_cost, expiration_date, intake_date)
+-- VALUES 
+--   ('101', '20', 'EXPIRED-LOT', 100.00, 5.50, '2025-01-01', '2024-01-01');
+
+-- -- ---------------------------------------------------------------------
+-- -- Test 1: (Sad Path) Try to consume the EXPIRED lot.
+-- -- This tests 'trg_validate_consumption' (Check 1).
+-- -- This INSERT should FAIL.
+-- -- ---------------------------------------------------------------------
+-- SELECT 'TESTING: (Sad Path) Consuming expired lot...' AS test_name;
+-- INSERT INTO BatchConsumption
+--   (product_lot_number, ingredient_lot_number, quantity_consumed)
+-- VALUES
+--   ('100-MFG001-B0901', '101-20-EXPIRED-LOT', 10.0);
+-- EXPECTED OUTPUT: ERROR 1644 (45000): ... Lot has expired.
+
+
+-- ---------------------------------------------------------------------
+-- Test 2: (Sad Path) Try to consume TOO MUCH from a valid lot.
+-- This tests 'trg_validate_consumption' (Check 2).
+-- This INSERT should FAIL.
+-- ---------------------------------------------------------------------
+-- SELECT 'TESTING: (Sad Path) Consuming too much quantity...' AS test_name;
+
+-- -- ACTION:
+-- -- Lot '106-20-B0006' (from populate.sql) has 600 units.
+-- -- We will try to consume 601.
+-- INSERT INTO BatchConsumption
+--   (product_lot_number, ingredient_lot_number, quantity_consumed)
+-- VALUES
+--   ('100-MFG001-B0901', '106-20-B0006', 601.0);
+-- EXPECTED OUTPUT: ERROR 1644 (45000): ... Not enough quantity on hand.
+
+
+-- ---------------------------------------------------------------------
+-- Test 3: (Happy Path) Consume a valid amount from a valid lot.
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Happy Path) Consuming valid quantity...' AS test_name;
+
+-- CHECK (BEFORE):
+-- Let's check the stock for lot '102-20-B0001'.
+SELECT quantity_on_hand FROM IngredientBatch WHERE lot_number = '102-20-B0001';
+-- EXPECTED OUTPUT: 600 (This is the amount *after* populate.sql ran)
+
+-- ACTION:
+-- Consume 100 units. This is valid.
+INSERT INTO BatchConsumption
+  (product_lot_number, ingredient_lot_number, quantity_consumed)
+VALUES
+  ('100-MFG001-B0901', '102-20-B0001', 100.0); -- CHANGED
+-- EXPECTED OUTPUT: (Success)
+
+-- CHECK (AFTER):
+-- Let's check the stock again. It should be 100 units lower.
+SELECT quantity_on_hand FROM IngredientBatch WHERE lot_number = '102-20-B0001';
+-- EXPECTED OUTPUT: 500
+
+-- ---------------------------------------------------------------------
+-- Test 4: (Adjustment) "Return" the consumed items.
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Adjustment) Deleting consumption record...' AS test_name;
+
+-- ACTION:
+DELETE FROM BatchConsumption
+WHERE product_lot_number = '100-MFG001-B0901' 
+  AND ingredient_lot_number = '102-20-B0001'; -- CHANGED
+-- EXPECTED OUTPUT: (Success)
+
+-- CHECK (FINAL):
+-- Let's check the stock one last time. It should be back to 600.
+SELECT quantity_on_hand FROM IngredientBatch WHERE lot_number = '102-20-B0001';
+-- EXPECTED OUTPUT: 600
