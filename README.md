@@ -13,7 +13,7 @@ This README serves as the **owner’s manual** for the **application development
 ├── sql_src/
 │   ├── schema.sql                 # (1) All CREATE TABLE statements
 │   ├── procedures_triggers.sql    # (2) All Triggers & Stored Procedures
-│   ├── populate.sql               # (3) Sample data
+│   ├── data.sql               # (3) Sample data
 │   └── test.sql                   # (4) MASTER BUILD & TEST SCRIPT
 │
 ├── main.py                        # (To be built by App Team)
