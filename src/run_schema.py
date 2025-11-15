@@ -10,7 +10,7 @@ import os
 
 # Database connection configuration
 DB_CONFIG = {
-    'host': 'localhost',
+    'unix_socket': '/tmp/mysql.sock',
     'user': 'root',
     'password': '',  # Change this to your MySQL password
     'charset': 'utf8mb4',

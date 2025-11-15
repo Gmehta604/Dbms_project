@@ -10,7 +10,7 @@ import os
 
 # Database connection configuration
 DB_CONFIG = {
-    'host': 'localhost',
+    'unix_socket': '/tmp/mysql.sock',
     'database': 'Meal_Manufacturer',  # Connect directly to the database
     'user': 'root',
     'password': '',  # Will prompt if empty

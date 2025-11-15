@@ -1,257 +1,216 @@
--- ============================================
--- MEAL MANUFACTURER DATABASE SCHEMA
--- Created from ER Diagram
--- ============================================
+-- =====================================================================
+-- 1. USER AND ROLE MANAGEMENT
+-- =====================================================================
 
--- 1. Create the database
-CREATE DATABASE IF NOT EXISTS Meal_Manufacturer;
-USE Meal_Manufacturer;
+CREATE TABLE Manufacturer (
+    manufacturer_id VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL
+    -- Other manufacturer details (address, etc.) could go here
+);
 
-CREATE TABLE Users (
-    user_id VARCHAR(20) PRIMARY KEY,
+CREATE TABLE Supplier (
+    supplier_id VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL
+    -- Other supplier details
+);
+
+-- Handles the login and role for all users
+CREATE TABLE AppUser (
+    user_id INT PRIMARY KEY AUTO_INCREMENT,
     username VARCHAR(100) NOT NULL UNIQUE,
-    password VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    -- This role determines which menu the user sees
     role ENUM('Manufacturer', 'Supplier', 'Viewer') NOT NULL,
-    name VARCHAR(150),
-    contact_info VARCHAR(255)
+    
+    -- These FKs link a user login to their specific company profile
+    -- A user can only be one role, so only one of these will be non-NULL.
+    manufacturer_id VARCHAR(20) NULL,
+    supplier_id VARCHAR(20) NULL,
+    
+    FOREIGN KEY (manufacturer_id) REFERENCES Manufacturer(manufacturer_id),
+    FOREIGN KEY (supplier_id) REFERENCES Supplier(supplier_id),
+    -- A CHECK constraint to ensure a user isn't both a supplier AND a manufacturer
+    CONSTRAINT chk_user_role CHECK (
+        (role = 'Manufacturer' AND manufacturer_id IS NOT NULL AND supplier_id IS NULL) OR
+        (role = 'Supplier' AND supplier_id IS NOT NULL AND manufacturer_id IS NULL) OR
+        (role = 'Viewer' AND manufacturer_id IS NULL AND supplier_id IS NULL)
+    )
 );
 
--- 3. MANUFACTURERS
--- Note: manufacturer_id is NOT AUTO_INCREMENT because sample data uses explicit IDs (1, 2)
-CREATE TABLE Manufacturers (
-    manufacturer_id INT PRIMARY KEY,
-    user_id VARCHAR(20) NOT NULL UNIQUE,
-    manufacturer_name VARCHAR(150),
-    FOREIGN KEY (user_id) REFERENCES Users(user_id)
+-- =====================================================================
+-- 2. PRODUCT & RECIPE DEFINITIONS (The "Templates")
+-- =====================================================================
+
+CREATE TABLE Category (
+    category_id VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE
 );
 
-CREATE TABLE Suppliers (
-    supplier_id INT PRIMARY KEY,
-    user_id VARCHAR(20) NOT NULL UNIQUE,
-    supplier_name VARCHAR(150),
-    FOREIGN KEY (user_id) REFERENCES Users(user_id)
+CREATE TABLE Ingredient (
+    ingredient_id VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    -- This 'type' is critical for the "no grandchildren" rule
+    ingredient_type ENUM('atomic', 'compound') NOT NULL
 );
 
--- 5. CATEGORIES
--- Note: category_id is NOT AUTO_INCREMENT because sample data uses explicit IDs (2, 3)
-CREATE TABLE Categories (
-    category_id INT PRIMARY KEY,
-    category_name VARCHAR(100) NOT NULL UNIQUE
+CREATE TABLE Product (
+    product_id VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    
+    -- FK to link to a category (e.g., 'Dinners')
+    category_id VARCHAR(20) NOT NULL,
+    -- FK to establish product "ownership" by a manufacturer
+    manufacturer_id VARCHAR(20) NOT NULL,
+    
+    -- Rule: We must store this to check for "integer multiple" production
+    -- Rule: Also used for the "nearly-out-of-stock" report
+    standard_batch_size INT NOT NULL CHECK (standard_batch_size > 0),
+    
+    FOREIGN KEY (category_id) REFERENCES Category(category_id),
+    FOREIGN KEY (manufacturer_id) REFERENCES Manufacturer(manufacturer_id)
 );
 
--- 6. PRODUCTS
--- Note: product_id is NOT AUTO_INCREMENT because sample data uses explicit IDs (100, 101)
-CREATE TABLE Products (
-    product_id INT PRIMARY KEY,
-    product_number VARCHAR(50) UNIQUE,
-    manufacturer_id INT NOT NULL,
-    category_id INT NOT NULL,
-    product_name VARCHAR(150) NOT NULL,
-    standard_batch_size INT NOT NULL,
-    created_date DATE,
-    FOREIGN KEY (manufacturer_id) REFERENCES Manufacturers(manufacturer_id),
-    FOREIGN KEY (category_id) REFERENCES Categories(category_id)
+-- Stores the "template" for a product (e.g., "v1 Steak Dinner")
+-- This allows a Product to have multiple recipe versions over time
+CREATE TABLE Recipe (
+    recipe_id INT PRIMARY KEY AUTO_INCREMENT,
+    product_id VARCHAR(20) NOT NULL,
+    name VARCHAR(100) NOT NULL, -- e.g., "v1-standard", "v2-low-sodium"
+    creation_date DATE NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE, -- Good for knowing which to use
+    
+    FOREIGN KEY (product_id) REFERENCES Product(product_id),
+    UNIQUE KEY (product_id, name) -- A product can't have two recipes named "v1"
 );
 
--- 7. INGREDIENTS
--- Note: ingredient_id is NOT AUTO_INCREMENT because sample data uses explicit IDs (101, 102, 104, 106, 108, 201, 301)
-CREATE TABLE Ingredients (
-    ingredient_id INT PRIMARY KEY,
-    ingredient_name VARCHAR(150) NOT NULL,
-    ingredient_type ENUM('Atomic','Compound') NOT NULL,
-    unit_of_measure VARCHAR(50),
-    description TEXT
+-- Linking table for the manufacturer's BOM (Recipe -> Ingredients)
+CREATE TABLE RecipeIngredient (
+    recipe_id INT NOT NULL,
+    ingredient_id VARCHAR(20) NOT NULL,
+    quantity DECIMAL(10, 2) NOT NULL,
+    unit_of_measure VARCHAR(20) NOT NULL, -- e.g., 'g', 'lbs', 'oz'
+    
+    PRIMARY KEY (recipe_id, ingredient_id),
+    FOREIGN KEY (recipe_id) REFERENCES Recipe(recipe_id),
+    FOREIGN KEY (ingredient_id) REFERENCES Ingredient(ingredient_id)
 );
 
--- 8. INGREDIENT_COMPOSITIONS (parent -> child relationship)
-CREATE TABLE Ingredient_Compositions (
-    parent_ingredient_id INT,
-    child_ingredient_id INT,
-    quantity_required DECIMAL(10,2),
-    PRIMARY KEY (parent_ingredient_id, child_ingredient_id),
-    FOREIGN KEY (parent_ingredient_id) REFERENCES Ingredients(ingredient_id),
-    FOREIGN KEY (child_ingredient_id) REFERENCES Ingredients(ingredient_id)
+-- =====================================================================
+-- 3. SUPPLIER FORMULATIONS (Supplier-specific Ingredient definitions)
+-- =====================================================================
+
+-- This is the supplier's "offer" for an ingredient
+CREATE TABLE Formulation (
+    formulation_id INT PRIMARY KEY AUTO_INCREMENT,
+    supplier_id VARCHAR(20) NOT NULL,
+    ingredient_id VARCHAR(20) NOT NULL,
+    
+    pack_size VARCHAR(50) NOT NULL,
+    unit_price DECIMAL(10, 2) NOT NULL,
+    
+    -- Used for versioning and selecting the "active" formulation
+    valid_from_date DATE NOT NULL,
+    valid_to_date DATE, -- NULL means it's currently active
+    
+    FOREIGN KEY (supplier_id) REFERENCES Supplier(supplier_id),
+    FOREIGN KEY (ingredient_id) REFERENCES Ingredient(ingredient_id)
+    -- We need a TRIGGER to prevent overlapping date ranges for the same (supplier, ingredient) pair
 );
 
--- 9. SUPPLIER_INGREDIENTS
-CREATE TABLE Supplier_Ingredients (
-    supplier_id INT,
-    ingredient_id INT,
-    is_active BOOLEAN DEFAULT TRUE,
-    PRIMARY KEY (supplier_id, ingredient_id),
-    FOREIGN KEY (supplier_id) REFERENCES Suppliers(supplier_id),
-    FOREIGN KEY (ingredient_id) REFERENCES Ingredients(ingredient_id)
-);
-
-CREATE TABLE Formulations (
-    formulation_id INT PRIMARY KEY,
-    supplier_id INT NOT NULL,
-    ingredient_id INT NOT NULL,
-    name VARCHAR(150),
-    FOREIGN KEY (supplier_id) REFERENCES Suppliers(supplier_id),
-    FOREIGN KEY (ingredient_id) REFERENCES Ingredients(ingredient_id)
-);
-
--- 11. FORMULATION_VERSIONS
-CREATE TABLE Formulation_Versions (
-    version_id INT PRIMARY KEY,
+-- Linking table for the supplier's "nested BOM"
+-- This REPLACES our initial 'CompoundIngredientMaterials' idea
+CREATE TABLE FormulationMaterials (
     formulation_id INT NOT NULL,
-    version_no INT NOT NULL,
-    pack_size DECIMAL(10,2),
-    unit_price DECIMAL(10,2),
-    effective_from DATE,
-    effective_to DATE,
-    is_active BOOLEAN DEFAULT TRUE,
-    FOREIGN KEY (formulation_id) REFERENCES Formulations(formulation_id),
-    UNIQUE KEY uniq_formulation_version (formulation_id, version_no)
+    material_ingredient_id VARCHAR(20) NOT NULL,
+    quantity DECIMAL(10, 2) NOT NULL,
+    
+    PRIMARY KEY (formulation_id, material_ingredient_id),
+    FOREIGN KEY (formulation_id) REFERENCES Formulation(formulation_id),
+    -- This FK points to the 'atomic' child ingredient
+    FOREIGN KEY (material_ingredient_id) REFERENCES Ingredient(ingredient_id)
+    -- We need a TRIGGER/CHECK to enforce the "no grandchildren" rule:
+    -- 'material_ingredient_id' MUST be of 'atomic' type.
 );
 
-CREATE TABLE Ingredient_Batches (
-    lot_number VARCHAR(100) PRIMARY KEY,
-    ingredient_id INT NOT NULL,
-    supplier_id INT NOT NULL,
-    version_id INT,
-    quantity_on_hand DECIMAL(10,2),
-    cost_per_unit DECIMAL(10,2),
-    expiration_date DATE,
-    received_date DATE,
-    FOREIGN KEY (ingredient_id) REFERENCES Ingredients(ingredient_id),
-    FOREIGN KEY (supplier_id) REFERENCES Suppliers(supplier_id),
-    FOREIGN KEY (version_id) REFERENCES Formulation_Versions(version_id)
+-- =====================================================================
+-- 4. INVENTORY & TRACEABILITY (The "Physical" Lots)
+-- =====================================================================
+
+-- Physical inventory of raw materials from suppliers
+CREATE TABLE IngredientBatch (
+    -- PK: This is the composite, human-readable ID
+    lot_number VARCHAR(255) PRIMARY KEY,
+    
+    -- These are the "parts" used to build the PK
+    ingredient_id VARCHAR(20) NOT NULL,
+    supplier_id VARCHAR(20) NOT NULL,
+    supplier_batch_id VARCHAR(100) NOT NULL, -- The ID from the supplier's bag
+    
+    quantity_on_hand DECIMAL(10, 2) NOT NULL,
+    per_unit_cost DECIMAL(10, 2) NOT NULL,
+    expiration_date DATE NOT NULL,
+    
+    -- Rule: We must store this to check the "90-day" intake rule
+    intake_date DATE NOT NULL,
+    
+    FOREIGN KEY (ingredient_id) REFERENCES Ingredient(ingredient_id),
+    FOREIGN KEY (supplier_id) REFERENCES Supplier(supplier_id),
+    -- Ensures you can't have two 'B001' batches for the same ingredient from the same supplier
+    UNIQUE KEY (ingredient_id, supplier_id, supplier_batch_id) 
 );
 
--- 13. RECIPE_PLANS
-CREATE TABLE Recipe_Plans (
-    plan_id INT PRIMARY KEY AUTO_INCREMENT,
-    product_id INT NOT NULL,
-    version_number INT NOT NULL,
-    created_date DATE,
-    is_active BOOLEAN DEFAULT TRUE,
-    FOREIGN KEY (product_id) REFERENCES Products(product_id)
+-- Physical inventory of finished goods made by the manufacturer
+CREATE TABLE ProductBatch (
+    -- PK: This is the composite, human-readable ID
+    lot_number VARCHAR(255) PRIMARY KEY,
+    
+    -- These are the "parts" used to build the PK
+    product_id VARCHAR(20) NOT NULL,
+    manufacturer_id VARCHAR(20) NOT NULL,
+    manufacturer_batch_id VARCHAR(100) NOT NULL, -- Your internal batch ID
+    
+    produced_quantity INT NOT NULL,
+    expiration_date DATE NOT NULL,
+    
+    -- Rule: We must store this for the "recall time window"
+    production_date DATETIME NOT NULL,
+    
+    -- Rule: We store this after calculating it
+    total_batch_cost DECIMAL(10, 2),
+    
+    -- Good practice: Store which recipe version was used for this batch
+    recipe_id_used INT NOT NULL,
+    
+    FOREIGN KEY (product_id) REFERENCES Product(product_id),
+    FOREIGN KEY (manufacturer_id) REFERENCES Manufacturer(manufacturer_id),
+    FOREIGN KEY (recipe_id_used) REFERENCES Recipe(recipe_id),
+    UNIQUE KEY (product_id, manufacturer_id, manufacturer_batch_id)
 );
 
--- 14. RECIPE_INGREDIENTS
-CREATE TABLE Recipe_Ingredients (
-    plan_id INT,
-    ingredient_id INT,
-    quantity_required DECIMAL(10,2),
-    PRIMARY KEY (plan_id, ingredient_id),
-    FOREIGN KEY (plan_id) REFERENCES Recipe_Plans(plan_id),
-    FOREIGN KEY (ingredient_id) REFERENCES Ingredients(ingredient_id)
+-- This is the MOST IMPORTANT table for traceability
+-- It's the "glue" between IngredientBatches and ProductBatches
+CREATE TABLE BatchConsumption (
+    product_lot_number VARCHAR(255) NOT NULL,
+    ingredient_lot_number VARCHAR(255) NOT NULL,
+    quantity_consumed DECIMAL(10, 2) NOT NULL,
+    
+    PRIMARY KEY (product_lot_number, ingredient_lot_number),
+    FOREIGN KEY (product_lot_number) REFERENCES ProductBatch(lot_number),
+    FOREIGN KEY (ingredient_lot_number) REFERENCES IngredientBatch(lot_number)
 );
 
-CREATE TABLE Product_Batches (
-    batch_number VARCHAR(100) PRIMARY KEY,
-    product_id INT NOT NULL,
-    plan_id INT NOT NULL,
-    quantity_produced INT,
-    total_cost DECIMAL(12,2),
-    cost_per_unit DECIMAL(12,2),
-    production_date DATE,
-    expiration_date DATE,
-    FOREIGN KEY (product_id) REFERENCES Products(product_id),
-    FOREIGN KEY (plan_id) REFERENCES Recipe_Plans(plan_id)
+-- =====================================================================
+-- 5. GRADUATE FEATURES
+-- =====================================================================
+
+-- Stores the (ingredient_a, ingredient_b) incompatible pairs
+CREATE TABLE DoNotCombine (
+    ingredient_a_id VARCHAR(20) NOT NULL,
+    ingredient_b_id VARCHAR(20) NOT NULL,
+    
+    PRIMARY KEY (ingredient_a_id, ingredient_b_id),
+    FOREIGN KEY (ingredient_a_id) REFERENCES Ingredient(ingredient_id),
+    FOREIGN KEY (ingredient_b_id) REFERENCES Ingredient(ingredient_id),
+    -- This prevents duplicate pairs (A,B) and (B,A)
+    CONSTRAINT chk_ingredient_order CHECK (ingredient_a_id < ingredient_b_id)
 );
-
--- 16. BATCH_CONSUMPTION
-CREATE TABLE Batch_Consumption (
-    product_batch_number VARCHAR(100),
-    ingredient_lot_number VARCHAR(100),
-    quantity_used DECIMAL(10,2),
-    PRIMARY KEY (product_batch_number, ingredient_lot_number),
-    FOREIGN KEY (product_batch_number) REFERENCES Product_Batches(batch_number),
-    FOREIGN KEY (ingredient_lot_number) REFERENCES Ingredient_Batches(lot_number)
-);
-
--- 17. DO_NOT_COMBINE
-CREATE TABLE Do_Not_Combine (
-    supplier_id INT NOT NULL,
-    ingredient1_id INT NOT NULL,
-    ingredient2_id INT NOT NULL,
-    reason VARCHAR(255),
-    created_date DATE,
-    PRIMARY KEY (supplier_id, ingredient1_id, ingredient2_id),
-    FOREIGN KEY (supplier_id) REFERENCES Suppliers(supplier_id),
-    FOREIGN KEY (ingredient1_id) REFERENCES Ingredients(ingredient_id),
-    FOREIGN KEY (ingredient2_id) REFERENCES Ingredients(ingredient_id)
-);
-
--- ============================================
--- CONSTRAINTS
--- ============================================
-
--- USERS
-ALTER TABLE Users
-  ADD CONSTRAINT chk_username_length CHECK (CHAR_LENGTH(username) > 0),
-  ADD CONSTRAINT chk_password_length CHECK (CHAR_LENGTH(password) >= 8);
-
--- MANUFACTURERS
-ALTER TABLE Manufacturers
-  ADD CONSTRAINT chk_manufacturer_name CHECK (manufacturer_name IS NULL OR CHAR_LENGTH(manufacturer_name) > 0);
-
--- SUPPLIERS
-ALTER TABLE Suppliers
-  ADD CONSTRAINT chk_supplier_name CHECK (supplier_name IS NULL OR CHAR_LENGTH(supplier_name) > 0);
-
--- CATEGORIES
-ALTER TABLE Categories
-  ADD CONSTRAINT chk_category_name CHECK (CHAR_LENGTH(category_name) > 0);
-
--- PRODUCTS
-ALTER TABLE Products
-  ADD CONSTRAINT chk_product_batch_size CHECK (standard_batch_size > 0),
-  ADD CONSTRAINT chk_product_name CHECK (CHAR_LENGTH(product_name) > 0);
-  -- Note: Date validation (created_date <= CURRENT_DATE) must be enforced in application code
-  -- MySQL/MariaDB CHECK constraints cannot use functions like CURRENT_DATE
-
--- INGREDIENTS
-ALTER TABLE Ingredients
-  ADD CONSTRAINT chk_ingredient_name CHECK (CHAR_LENGTH(ingredient_name) > 0);
-
--- INGREDIENT_COMPOSITIONS
-ALTER TABLE Ingredient_Compositions
-  ADD CONSTRAINT chk_composition_qty CHECK (quantity_required > 0),
-  ADD CONSTRAINT chk_no_self_ref CHECK (parent_ingredient_id <> child_ingredient_id);
-
--- FORMULATION_VERSIONS
-ALTER TABLE Formulation_Versions
-  ADD CONSTRAINT chk_form_pack_size CHECK (pack_size > 0),
-  ADD CONSTRAINT chk_form_price CHECK (unit_price >= 0),
-  ADD CONSTRAINT chk_form_dates CHECK (effective_to IS NULL OR effective_from <= effective_to),
-  ADD CONSTRAINT chk_form_version CHECK (version_no > 0);
-
--- INGREDIENT_BATCHES
-ALTER TABLE Ingredient_Batches
-  ADD CONSTRAINT chk_ing_batch_qty CHECK (quantity_on_hand >= 0),
-  ADD CONSTRAINT chk_ing_batch_cost CHECK (cost_per_unit >= 0),
-  ADD CONSTRAINT chk_ing_batch_dates CHECK (
-    (received_date IS NULL OR expiration_date IS NULL)
-    OR received_date <= expiration_date
-  );
-
--- RECIPE_PLANS
-ALTER TABLE Recipe_Plans
-  ADD CONSTRAINT chk_recipe_version CHECK (version_number > 0);
-  -- Note: Date validation (created_date <= CURRENT_DATE) must be enforced in application code
-  -- MySQL/MariaDB CHECK constraints cannot use functions like CURRENT_DATE
-
--- RECIPE_INGREDIENTS
-ALTER TABLE Recipe_Ingredients
-  ADD CONSTRAINT chk_recipe_qty CHECK (quantity_required > 0);
-
--- PRODUCT_BATCHES
-ALTER TABLE Product_Batches
-  ADD CONSTRAINT chk_prod_batch_qty CHECK (quantity_produced >= 0),
-  ADD CONSTRAINT chk_prod_batch_cost CHECK (total_cost >= 0 AND cost_per_unit >= 0),
-  ADD CONSTRAINT chk_prod_batch_dates CHECK (
-    (production_date IS NULL OR expiration_date IS NULL)
-    OR production_date <= expiration_date
-  );
-
--- BATCH_CONSUMPTION
-ALTER TABLE Batch_Consumption
-  ADD CONSTRAINT chk_batch_consumed CHECK (quantity_used > 0);
-
--- DO_NOT_COMBINE
-ALTER TABLE Do_Not_Combine
-  ADD CONSTRAINT chk_no_self_combine CHECK (ingredient1_id <> ingredient2_id);

@@ -11,7 +11,7 @@ import getpass
 
 # Database connection configuration
 DB_CONFIG = {
-    'host': 'localhost',
+    'unix_socket': '/tmp/mysql.sock',
     'database': 'Meal_Manufacturer',
     'user': 'root',
     'password': '',
