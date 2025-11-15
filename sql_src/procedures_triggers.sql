@@ -150,5 +150,97 @@ BEGIN
 END;
 //
 
+-- ---------------------------------------------------------------------
+-- Procedure: Record Production Batch
+-- This is the main "engine" of the application. It atomically
+-- creates a new product batch and consumes all specified ingredients.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS Record_Production_Batch;
+//
+CREATE PROCEDURE Record_Production_Batch(
+    -- IN parameters are data we pass *into* the procedure
+    IN p_product_id VARCHAR(20),
+    IN p_manufacturer_id VARCHAR(20),
+    IN p_manufacturer_batch_id VARCHAR(100),
+    IN p_produced_quantity INT,
+    IN p_expiration_date DATE,
+    IN p_recipe_id_used INT,
+    IN p_consumption_list JSON -- e.g., '[{"lot": "106-20-B0006", "qty": 600}, ...]'
+)
+BEGIN
+    -- == 1. DECLARE VARIABLES ==
+    -- We'll store the calculated cost and new lot number here
+    DECLARE v_total_cost DECIMAL(10, 2) DEFAULT 0.00;
+    DECLARE v_new_lot_number VARCHAR(255);
+
+    -- == 2. ERROR HANDLER ==
+    -- This is the "safety net". If *any* SQL error occurs (like
+    -- our triggers failing), this handler will catch it.
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- An error occurred! Undo *all* changes.
+        ROLLBACK;
+        -- Pass the error message back up to the Python app
+        RESIGNAL;
+    END;
+
+    -- == 3. START TRANSACTION ==
+    -- This is the "safety bubble". All or nothing.
+    START TRANSACTION;
+    
+    -- == 4. CALCULATE TOTAL COST ==
+    -- We use JSON_TABLE to turn the JSON array into a temporary table
+    -- which we can JOIN with IngredientBatch to calculate the cost.
+    SELECT SUM(jt.qty * ib.per_unit_cost)
+    INTO v_total_cost
+    FROM 
+      JSON_TABLE(p_consumption_list, '$[*]' COLUMNS (
+          lot VARCHAR(255) PATH '$.lot',
+          qty DECIMAL(10, 2) PATH '$.qty'
+      )) AS jt
+    JOIN 
+      IngredientBatch AS ib ON ib.lot_number = jt.lot;
+
+    -- == 5. CREATE THE FINISHED GOODS (PRODUCT BATCH) ==
+    -- We insert the new product batch into the table.
+    -- Our 'trg_compute_product_lot_number' will fire automatically.
+    INSERT INTO ProductBatch
+      (product_id, manufacturer_id, manufacturer_batch_id, 
+       produced_quantity, production_date, expiration_date, 
+       recipe_id_used, total_batch_cost)
+    VALUES
+      (p_product_id, p_manufacturer_id, p_manufacturer_batch_id,
+       p_produced_quantity, CURDATE(), p_expiration_date,
+       p_recipe_id_used, v_total_cost);
+
+    -- == 6. CONSUME THE INGREDIENTS ==
+    -- We need the new lot number to link to the consumption records.
+    -- We can re-build it because we have all the parts.
+    SET v_new_lot_number = CONCAT(p_product_id, '-', p_manufacturer_id, '-', p_manufacturer_batch_id);
+
+    -- Now, insert all consumption records.
+    -- Our 'trg_validate_consumption' (BEFORE) and
+    -- 'trg_maintain_on_hand_CONSUME' (AFTER) will fire
+    -- automatically for *each row* this INSERT creates.
+    INSERT INTO BatchConsumption
+      (product_lot_number, ingredient_lot_number, quantity_consumed)
+    SELECT
+      v_new_lot_number, -- The new lot number we just created
+      jt.lot,           -- The 'lot' column from the JSON
+      jt.qty            -- The 'qty' column from the JSON
+    FROM 
+      JSON_TABLE(p_consumption_list, '$[*]' COLUMNS (
+          lot VARCHAR(255) PATH '$.lot',
+          qty DECIMAL(10, 2) PATH '$.qty'
+      )) AS jt;
+
+    -- == 7. COMMIT ==
+    -- If we made it this far, it means no errors occurred.
+    -- We exit the "safety bubble" and make all changes permanent.
+    COMMIT;
+
+END;
+//
+
 
 DELIMITER ;

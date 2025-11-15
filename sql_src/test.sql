@@ -206,3 +206,142 @@ WHERE product_lot_number = '100-MFG001-B0901'
 -- Let's check the stock one last time. It should be back to 600.
 SELECT quantity_on_hand FROM IngredientBatch WHERE lot_number = '102-20-B0001';
 -- EXPECTED OUTPUT: 600
+
+-- =====================================================================
+-- TEST FOR: Procedure: Record_Production_Batch (ATOMICITY)
+-- =====================================================================
+SELECT 'TESTING: Stored Procedure Record_Production_Batch' AS test_name;
+
+-- ---------------------------------------------------------------------
+-- Test 1: (Happy Path) Create a new, valid Product Batch
+-- This tests:
+-- 1. The procedure itself (CALL)
+-- 2. The JSON_TABLE function
+-- 3. The total_batch_cost calculation
+-- 4. The 'trg_validate_consumption' (Happy Path)
+-- 5. The 'trg_maintain_on_hand_CONSUME' (Subtracting)
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Happy Path) Calling Record_Production_Batch...' AS test_name;
+
+-- CHECK (BEFORE):
+-- Let's check the stock for the two lots we are about to consume.
+-- From populate.sql, '106-20-B0005' has 3000 units.
+-- From populate.sql, '201-20-B0001' has 100 units.
+SELECT lot_number, quantity_on_hand 
+FROM IngredientBatch 
+WHERE lot_number IN ('106-20-B0005', '201-20-B0001');
+-- EXPECTED:
+-- '106-20-B0005', 3000.00
+-- '201-20-B0001', 100.00
+
+-- ACTION:
+-- We will create a new 100-unit batch of 'Steak Dinner' (Product '100').
+-- The recipe (from populate.sql) needs:
+--   - '106' (Beef): 6.0 oz/unit * 100 units = 600 oz
+--   - '201' (Seasoning): 0.2 oz/unit * 100 units = 20 oz
+-- We'll use lots '106-20-B0005' (has 3000) and '201-20-B0001' (has 100).
+SET @consumption_list = '[
+    {"lot": "106-20-B0005", "qty": 600},
+    {"lot": "201-20-B0001", "qty": 20}
+]';
+
+CALL Record_Production_Batch(
+    '100',          -- p_product_id
+    'MFG001',       -- p_manufacturer_id
+    'B-TEST-001',   -- p_manufacturer_batch_id (a new, unique ID)
+    100,            -- p_produced_quantity
+    '2026-12-01',   -- p_expiration_date
+    1,              -- p_recipe_id_used (v1-Steak-Dinner)
+    @consumption_list
+);
+-- EXPECTED: (Success)
+
+-- CHECK (AFTER):
+-- 1. Check if the stock was correctly subtracted
+SELECT lot_number, quantity_on_hand 
+FROM IngredientBatch 
+WHERE lot_number IN ('106-20-B0005', '201-20-B0001');
+-- EXPECTED:
+-- '106-20-B0005', 2400.00  (3000 - 600)
+-- '201-20-B0001', 80.00    (100 - 20)
+
+-- 2. Check if the new ProductBatch was created
+--    Cost should be (600 * 0.5) + (20 * 2.5) = 300 + 50 = 350.00
+SELECT lot_number, total_batch_cost 
+FROM ProductBatch 
+WHERE manufacturer_batch_id = 'B-TEST-001';
+-- EXPECTED: '100-MFG001-B-TEST-001', 350.00
+
+-- 3. Check if the BatchConsumption records were created
+SELECT * FROM BatchConsumption 
+WHERE product_lot_number = '100-MFG001-B-TEST-001';
+-- EXPECTED: (2 rows returned)
+
+
+-- ---------------------------------------------------------------------
+-- Test 2: (Sad Path) Not Enough Quantity
+-- This tests:
+-- 1. The 'trg_validate_consumption' (Check 2: Quantity)
+-- 2. The 'ROLLBACK' in the procedure's error handler
+-- ---------------------------------------------------------------------
+-- SELECT 'TESTING: (Sad Path) Not enough quantity...' AS test_name;
+
+-- -- ACTION:
+-- -- Try to create a *new* batch ('B-TEST-002')
+-- -- Lot '101-20-B0003' has 500 units. We will try to consume 501.
+-- SET @bad_consumption_list = '[{"lot": "101-20-B0003", "qty": 501}]';
+
+-- CALL Record_Production_Batch(
+--     '100',          -- p_product_id
+--     'MFG001',       -- p_manufacturer_id
+--     'B-TEST-002',   -- p_manufacturer_batch_id (a new, unique ID)
+--     100,            -- p_produced_quantity
+--     '2026-12-01',   -- p_expiration_date
+--     1,              -- p_recipe_id_used
+--     @bad_consumption_list
+-- );
+-- -- EXPECTED: ERROR 1644 (45000): ... Not enough quantity on hand.
+
+-- -- CHECK (ROLLBACK):
+-- -- This is the *most important check*. We must prove that
+-- -- the 'B-TEST-002' batch was *NOT* created.
+-- SELECT * FROM ProductBatch 
+-- WHERE manufacturer_batch_id = 'B-TEST-002';
+-- -- EXPECTED: (0 rows returned)
+
+
+-- ---------------------------------------------------------------------
+-- Test 3: (Sad Path) Expired Lot
+-- This tests:
+-- 1. The 'trg_validate_consumption' (Check 1: Expiration)
+-- 2. The 'ROLLBACK' in the procedure's error handler
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Sad Path) Expired lot...' AS test_name;
+
+-- SETUP: Create a fake, expired lot
+INSERT INTO IngredientBatch 
+  (ingredient_id, supplier_id, supplier_batch_id, 
+   quantity_on_hand, per_unit_cost, expiration_date, intake_date)
+VALUES 
+  ('101', '20', 'EXPIRED-TEST-LOT', 100, 5.0, '2025-01-01', '2024-01-01');
+
+-- ACTION:
+-- Try to create a *new* batch ('B-TEST-003') using the expired lot.
+SET @expired_list = '[{"lot": "101-20-EXPIRED-TEST-LOT", "qty": 10}]';
+
+CALL Record_Production_Batch(
+    '100',          -- p_product_id
+    'MFG001',        -- p_manufacturer_id
+    'B-TEST-003',   -- p_manufacturer_batch_id (a new, unique ID)
+    100,            -- p_produced_quantity
+    '2026-12-01',   -- p_expiration_date
+    1,              -- p_recipe_id_used
+    @expired_list
+);
+-- EXPECTED: ERROR 1644 (45000): ... Lot has expired.
+
+-- CHECK (ROLLBACK):
+-- Prove that the 'B-TEST-003' batch was *NOT* created.
+SELECT * FROM ProductBatch 
+WHERE manufacturer_batch_id = 'B-TEST-003';
+-- EXPECTED: (0 rows returned)
