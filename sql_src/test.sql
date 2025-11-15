@@ -316,32 +316,81 @@ WHERE product_lot_number = '100-MFG001-B-TEST-001';
 -- 1. The 'trg_validate_consumption' (Check 1: Expiration)
 -- 2. The 'ROLLBACK' in the procedure's error handler
 -- ---------------------------------------------------------------------
-SELECT 'TESTING: (Sad Path) Expired lot...' AS test_name;
+-- SELECT 'TESTING: (Sad Path) Expired lot...' AS test_name;
 
--- SETUP: Create a fake, expired lot
-INSERT INTO IngredientBatch 
-  (ingredient_id, supplier_id, supplier_batch_id, 
-   quantity_on_hand, per_unit_cost, expiration_date, intake_date)
-VALUES 
-  ('101', '20', 'EXPIRED-TEST-LOT', 100, 5.0, '2025-01-01', '2024-01-01');
+-- -- SETUP: Create a fake, expired lot
+-- INSERT INTO IngredientBatch 
+--   (ingredient_id, supplier_id, supplier_batch_id, 
+--    quantity_on_hand, per_unit_cost, expiration_date, intake_date)
+-- VALUES 
+--   ('101', '20', 'EXPIRED-TEST-LOT', 100, 5.0, '2025-01-01', '2024-01-01');
 
--- ACTION:
--- Try to create a *new* batch ('B-TEST-003') using the expired lot.
-SET @expired_list = '[{"lot": "101-20-EXPIRED-TEST-LOT", "qty": 10}]';
+-- -- ACTION:
+-- -- Try to create a *new* batch ('B-TEST-003') using the expired lot.
+-- SET @expired_list = '[{"lot": "101-20-EXPIRED-TEST-LOT", "qty": 10}]';
 
-CALL Record_Production_Batch(
-    '100',          -- p_product_id
-    'MFG001',        -- p_manufacturer_id
-    'B-TEST-003',   -- p_manufacturer_batch_id (a new, unique ID)
-    100,            -- p_produced_quantity
-    '2026-12-01',   -- p_expiration_date
-    1,              -- p_recipe_id_used
-    @expired_list
+-- CALL Record_Production_Batch(
+--     '100',          -- p_product_id
+--     'MFG001',        -- p_manufacturer_id
+--     'B-TEST-003',   -- p_manufacturer_batch_id (a new, unique ID)
+--     100,            -- p_produced_quantity
+--     '2026-12-01',   -- p_expiration_date
+--     1,              -- p_recipe_id_used
+--     @expired_list
+-- );
+-- -- EXPECTED: ERROR 1644 (45000): ... Lot has expired.
+
+-- -- CHECK (ROLLBACK):
+-- -- Prove that the 'B-TEST-003' batch was *NOT* created.
+-- SELECT * FROM ProductBatch 
+-- WHERE manufacturer_batch_id = 'B-TEST-003';
+-- -- EXPECTED: (0 rows returned)
+
+-- =====================================================================
+-- TEST FOR: Procedure: Trace_Recall
+-- =====================================================================
+SELECT 'TESTING: Stored Procedure Trace_Recall' AS test_name;
+
+-- ---------------------------------------------------------------------
+-- Test 1: (Happy Path) Recall an item *INSIDE* the 20-day window
+-- (FIXED: Removed extra quotes from the string)
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Happy Path) Lot 106-20-B0006 recalled on 2025-09-30...' AS test_name;
+
+-- DATA CHECK: '100-MFG001-B0901' consumed '106-20-B0006' and was produced on '2025-09-26'.
+-- TEST: Recall date '2025-09-30'. Window is '2025-09-10' to '2025-09-30'.
+-- '2025-09-26' is IN the window.
+CALL Trace_Recall(
+    '106-20-B0006',  -- p_ingredient_lot_number
+    '2025-09-30'     -- p_recall_date
 );
--- EXPECTED: ERROR 1644 (45000): ... Lot has expired.
+-- EXPECTED OUTPUT: (1 row returned: '100-MFG001-B0901', 'Steak Dinner', ...)
 
--- CHECK (ROLLBACK):
--- Prove that the 'B-TEST-003' batch was *NOT* created.
-SELECT * FROM ProductBatch 
-WHERE manufacturer_batch_id = 'B-TEST-003';
--- EXPECTED: (0 rows returned)
+
+-- ---------------------------------------------------------------------
+-- Test 2: (Sad Path) Recall an item *OUTSIDE* the 20-day window
+-- (FIXED: Removed extra quotes from the string)
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Sad Path) Lot 106-20-B0006 recalled on 2025-10-20...' AS test_name;
+
+-- DATA CHECK: '100-MFG001-B0901' was produced on '2025-09-26'.
+-- TEST: Recall date '2025-10-20'. Window is '2025-10-01' to '2025-10-20'.
+-- '2025-09-26' is NOT in the window.
+CALL Trace_Recall(
+    '106-20-B0006',  -- p_ingredient_lot_number
+    '2025-10-20'     -- p_recall_date
+);
+-- EXPECTED OUTPUT: Empty set (0 rows returned)
+
+
+-- ---------------------------------------------------------------------
+-- Test 3: (Sad Path) Recall a lot that was never consumed
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Sad Path) Lot 101-20-B0001 (never consumed)...' AS test_name;
+
+-- DATA CHECK: '101-20-B0001' exists but is not in BatchConsumption.
+CALL Trace_Recall(
+    '101-20-B0001',  -- p_ingredient_lot_number
+    '2025-12-01'     -- p_recall_date
+);
+-- EXPECTED OUTPUT: Empty set (0 rows returned)

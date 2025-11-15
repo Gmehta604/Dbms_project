@@ -242,5 +242,42 @@ BEGIN
 END;
 //
 
+-- ---------------------------------------------------------------------
+-- Procedure: Trace Recall
+-- This procedure finds all product batches affected by a
+-- specific recalled ingredient lot, within a 20-day window.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS Trace_Recall;
+//
+CREATE PROCEDURE Trace_Recall(
+    IN p_ingredient_lot_number VARCHAR(255), -- The lot ID to recall
+    IN p_recall_date DATE                    -- The date the recall was issued
+)
+BEGIN
+    -- This query joins the consumption link to the batch and product tables.
+    SELECT
+        pb.lot_number AS affected_product_lot,
+        p.name AS product_name,
+        pb.production_date,
+        pb.expiration_date,
+        pb.produced_quantity
+    FROM
+        BatchConsumption AS bc
+    JOIN
+        ProductBatch AS pb ON bc.product_lot_number = pb.lot_number
+    JOIN
+        Product AS p ON pb.product_id = p.product_id
+    WHERE
+        -- 1. Find the specific recalled ingredient lot
+        bc.ingredient_lot_number = p_ingredient_lot_number
+        
+        -- 2. Filter by the 20-day time window
+        -- We check if the production_date (a DATETIME) is between
+        -- 20 days *before* the recall date and the recall date itself.
+        AND DATE(pb.production_date) 
+            BETWEEN (p_recall_date - INTERVAL 20 DAY) AND p_recall_date;
+
+END;
+//
 
 DELIMITER ;
