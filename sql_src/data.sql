@@ -28,17 +28,17 @@ TRUNCATE TABLE Do_Not_Combine;
 -- USERS
 -- ============================================
 INSERT INTO Users (user_id, username, password, role, name, contact_info) VALUES
-('MFG001', 'johnsmith', 'password123', 'Manufacturer', 'John Smith', NULL),
-('MFG002', 'alicelee', 'password123', 'Manufacturer', 'Alice Lee', NULL),
-('SUP020', 'janedoe', 'password123', 'Supplier', 'Jane Doe', NULL),
-('SUP021', 'jamesmiller', 'password123', 'Supplier', 'James Miller', NULL),
-('VIEW001', 'bobjohnson', 'password123', 'Viewer', 'Bob Johnson', NULL);
+('MFG001', 'johnsmith', 'password123', 'MANUFACTURER', 'John Smith', NULL),
+('MFG002', 'alicelee', 'password123', 'MANUFACTURER', 'Alice Lee', NULL),
+('SUP020', 'janedoe', 'password123', 'SUPPLIER', 'Jane Doe', NULL),
+('SUP021', 'jamesmiller', 'password123', 'SUPPLIER', 'James Miller', NULL),
+('VIEW001', 'bobjohnson', 'password123', 'VIEWER', 'Bob Johnson', NULL);
 -- ============================================
 -- MANUFACTURERS
 -- ============================================
 INSERT INTO Manufacturers (manufacturer_id, user_id, manufacturer_name) VALUES
-(1, 'MFG001', 'John Smith Manufacturing'),
-(2, 'MFG002', 'Alice Lee Foods');
+(1, 'MFG001', 'John Smith'),
+(2, 'MFG002', 'Alice Lee ');
 -- ============================================
 -- SUPPLIERS
 -- ============================================
