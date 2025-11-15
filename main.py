@@ -3,6 +3,7 @@ import getpass
 import json
 import sys
 from datetime import date, timedelta
+from tabulate import tabulate # Import at the top
 
 # --- Database Configuration ---
 DB_CONFIG = {
@@ -12,16 +13,20 @@ DB_CONFIG = {
 }
 
 # --- Helper Functions ---
-def pretty_print_results(cursor, headers):
-    """Helper function to print query results in a nice table."""
+def pretty_print_results(cursor):
+    """
+    Helper function to print query results in a nice table.
+    FIXED: It automatically uses the column names (AS clauses)
+    from your SQL query as the headers.
+    """
     results = cursor.fetchall()
     if not results:
         print("No results found.")
         return
     
-    # Use tabulate or a simple manual format
-    from tabulate import tabulate
-    print(tabulate(results, headers=headers, tablefmt="grid"))
+    # "headers='keys'" tells tabulate to use the dictionary keys
+    # (i.e., your SQL 'AS' clauses) as the table headers.
+    print(tabulate(results, headers="keys", tablefmt="grid"))
 
 # --- Main Application ---
 
@@ -267,9 +272,9 @@ def run_manufacturer_reports(cursor, user_session):
             print("Report 1: Last batch of Steak Dinner (100) by MFG001")
             query1 = """
                 SELECT
-                    bc.ingredient_lot_number,
-                    i.name,
-                    pb.production_date
+                    bc.ingredient_lot_number AS 'Ingredient Lot',
+                    i.name AS 'Ingredient Name',
+                    pb.production_date AS 'Produced On'
                 FROM ProductBatch pb
                 JOIN BatchConsumption bc ON pb.lot_number = bc.product_lot_number
                 JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
@@ -282,14 +287,14 @@ def run_manufacturer_reports(cursor, user_session):
                 LIMIT 1;
             """
             cursor.execute(query1)
-            pretty_print_results(cursor, ["Ingredient Lot", "Ingredient Name", "Production Date"])
+            pretty_print_results(cursor)
 
         elif choice == '2':
             print("Report 2: Total spending by MFG002, by supplier")
             query2 = """
                 SELECT
-                    s.name AS supplier_name,
-                    SUM(bc.quantity_consumed * ib.per_unit_cost) AS total_spent
+                    s.name AS 'Supplier Name',
+                    SUM(bc.quantity_consumed * ib.per_unit_cost) AS 'Total Spent ($)'
                 FROM
                     BatchConsumption bc
                 JOIN
@@ -304,25 +309,23 @@ def run_manufacturer_reports(cursor, user_session):
                     s.supplier_id, s.name;
             """
             cursor.execute(query2)
-            pretty_print_results(cursor, ["Supplier", "Total Spent ($)"])
+            pretty_print_results(cursor)
 
         elif choice == '3':
             print("Report 3: Unit cost for lot '100-MFG001-B0901'")
             query3 = """
                 SELECT
-                    (total_batch_cost / produced_quantity) AS unit_cost
+                    (total_batch_cost / produced_quantity) AS 'Unit Cost ($)'
                 FROM
                     ProductBatch
                 WHERE
                     lot_number = '100-MFG001-B0901';
             """
             cursor.execute(query3)
-            pretty_print_results(cursor, ["Unit Cost ($)"])
+            pretty_print_results(cursor)
 
         elif choice == '4':
             print("Report 4: Conflicting ingredients for lot '100-MFG001-B0901'")
-            # This is the hardest query. We must re-create the "flattening" logic.
-            
             # 1. Create a temporary table for this session
             cursor.execute("""
                 CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch (
@@ -360,8 +363,8 @@ def run_manufacturer_reports(cursor, user_session):
             # 4. Now, find all ingredients in the DB that conflict with this list
             query4 = """
                 SELECT
-                    i.ingredient_id,
-                    i.name AS conflicting_ingredient
+                    i.ingredient_id AS 'Conflicting ID',
+                    i.name AS 'Conflicting Ingredient Name'
                 FROM
                     Ingredient i
                 JOIN
@@ -372,8 +375,8 @@ def run_manufacturer_reports(cursor, user_session):
                     i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch)
                 UNION
                 SELECT
-                    i.ingredient_id,
-                    i.name AS conflicting_ingredient
+                    i.ingredient_id AS 'Conflicting ID',
+                    i.name AS 'Conflicting Ingredient Name'
                 FROM
                     Ingredient i
                 JOIN
@@ -384,12 +387,14 @@ def run_manufacturer_reports(cursor, user_session):
                     i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch);
             """
             cursor.execute(query4)
-            pretty_print_results(cursor, ["Conflicting ID", "Conflicting Ingredient Name"])
+            pretty_print_results(cursor)
 
         elif choice == '5':
             print("Report 5: Manufacturers not supplied by 'James Miller' (21)")
             query5 = """
-                SELECT m.manufacturer_id, m.name
+                SELECT 
+                    m.manufacturer_id AS 'Manufacturer ID', 
+                    m.name AS 'Manufacturer Name'
                 FROM Manufacturer m
                 WHERE m.manufacturer_id NOT IN (
                     SELECT DISTINCT
@@ -405,7 +410,7 @@ def run_manufacturer_reports(cursor, user_session):
                 );
             """
             cursor.execute(query5)
-            pretty_print_results(cursor, ["Manufacturer ID", "Manufacturer Name"])
+            pretty_print_results(cursor)
             
         else:
             print("Invalid choice.")
@@ -430,7 +435,7 @@ def manufacturer_menu(cursor, db, user_session):
             create_recipe_plan(cursor, db, user_session)
         elif choice == '3':
             create_product_batch(cursor, db, user_session)
-        elif choice == '4.':
+        elif choice == '4':
             run_manufacturer_reports(cursor, user_session)
         elif choice == '5':
             break
@@ -504,7 +509,7 @@ def supplier_menu(cursor, db, user_session):
             print("Function not yet implemented. (Simple INSERT into FormulationMaterials)")
         elif choice == '3':
             create_supplier_batch(cursor, db, user_session)
-        elif choice == '4':
+        elif choice == '44':
             break
         else:
             print("Invalid choice.")
@@ -574,7 +579,8 @@ def generate_ingredient_list(cursor, user_session):
         final_list = {}
         for item in ingredients:
             name = item['name']
-            qty = item['quantity']
+            # We need to get the key 'quantity' or 'total_quantity'
+            qty = item.get('quantity') or item.get('total_quantity', 0)
             if name in final_list:
                 final_list[name] += qty
             else:
@@ -603,15 +609,20 @@ def viewer_menu(cursor, db, user_session):
         if choice == '1':
             print("\n--- All Product Types ---")
             try:
+                # FIXED: Added 'AS' clauses to match the new pretty_print
                 query = """
-                    SELECT p.product_id, p.name, c.name AS category, m.name AS manufacturer
+                    SELECT 
+                        p.product_id AS 'ID', 
+                        p.name AS 'Product Name', 
+                        c.name AS 'Category', 
+                        m.name AS 'Manufacturer'
                     FROM Product p
                     JOIN Category c ON p.category_id = c.category_id
                     JOIN Manufacturer m ON p.manufacturer_id = m.manufacturer_id
                     ORDER BY m.name, c.name, p.name
                 """
                 cursor.execute(query)
-                pretty_print_results(cursor, ["ID", "Product Name", "Category", "Manufacturer"])
+                pretty_print_results(cursor) # No headers argument needed
             except mysql.connector.Error as err:
                 print(f"Error: {err.msg}")
         elif choice == '2':
