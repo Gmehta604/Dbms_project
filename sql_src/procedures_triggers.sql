@@ -9,337 +9,394 @@ USE Meal_Manufacturer;
 -- TRIGGERS
 -- ============================================
 
--- Trigger 1: Compute Ingredient Lot Number on insert
--- Enforces format: ingredientId-supplierId-batchId
+-- ============================================
+-- LOT NUMBER TRIGGERS (Completed)
+-- ============================================
+
+-- Drop the trigger if it already exists to prevent an error
+DROP TRIGGER IF EXISTS trg_compute_ingredient_lot_number;
+
 DELIMITER //
-
-DROP TRIGGER IF EXISTS trg_ingredient_batch_lot_number//
-CREATE TRIGGER trg_ingredient_batch_lot_number
-BEFORE INSERT ON Ingredient_Batches
+CREATE TRIGGER trg_compute_ingredient_lot_number
+-- This specifies that the trigger runs *before* the INSERT operation
+BEFORE INSERT ON IngredientBatch
+-- This means the trigger runs for each individual row being inserted
 FOR EACH ROW
 BEGIN
-    DECLARE expected_lot VARCHAR(100);
-    
-    -- Generate expected lot number format: ingredientId-supplierId-batchId
-    -- Extract batch ID from the provided lot_number (assuming format is correct)
-    -- If lot_number doesn't match expected format, generate it
-    SET expected_lot = CONCAT(NEW.ingredient_id, '-', NEW.supplier_id, '-', 
-                              SUBSTRING_INDEX(NEW.lot_number, '-', -1));
-    
-    -- Validate format matches expected pattern
-    IF NEW.lot_number NOT REGEXP CONCAT('^', NEW.ingredient_id, '-', NEW.supplier_id, '-[A-Z0-9]+$') THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Lot number format must be: ingredientId-supplierId-batchId';
-    END IF;
-    
-    -- Check uniqueness
-    IF EXISTS (SELECT 1 FROM Ingredient_Batches WHERE lot_number = NEW.lot_number) THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Lot number already exists';
-    END IF;
-END//
+  -- 'NEW' is a special keyword that refers to the row that is *about*
+  -- to be inserted into the table.
+  
+  -- We set the 'lot_number' column of the new row by concatenating
+  -- the three "part" columns with hyphens.
+  SET NEW.lot_number = CONCAT(
+    NEW.ingredient_id, 
+    '-', 
+    NEW.supplier_id, 
+    '-', 
+    NEW.supplier_batch_id
+  );
+END;
+//
 
--- Trigger 2: Prevent Expired Consumption
-DROP TRIGGER IF EXISTS trg_prevent_expired_consumption//
-CREATE TRIGGER trg_prevent_expired_consumption
-BEFORE INSERT ON Batch_Consumption
+-- Drop the trigger if it already exists to prevent an error
+DROP TRIGGER IF EXISTS trg_compute_product_lot_number;
+
+CREATE TRIGGER trg_compute_product_lot_number
+-- This trigger fires *before* a new row is saved
+BEFORE INSERT ON ProductBatch
+-- This means the trigger runs for each individual row being inserted
 FOR EACH ROW
 BEGIN
-    DECLARE exp_date DATE;
-    
-    -- Get expiration date of the ingredient lot
-    SELECT expiration_date INTO exp_date
-    FROM Ingredient_Batches
+  -- 'NEW' refers to the row that is *about* to be inserted.
+  
+  -- We set the 'lot_number' column by concatenating the "parts"
+  -- just like we did for the ingredient batch.
+  SET NEW.lot_number = CONCAT(
+    NEW.product_id, 
+    '-', 
+    NEW.manufacturer_id, 
+    '-', 
+    NEW.manufacturer_batch_id
+  );
+END;
+
+-- ============================================
+-- MASTER CONSUMPTION VALIDATION TRIGGER (UPDATED)
+-- ============================================
+
+-- Drop the old trigger
+DROP TRIGGER IF EXISTS trg_prevent_expired_consumption;
+-- Drop the new trigger if it exists
+DROP TRIGGER IF EXISTS trg_validate_consumption;
+//
+CREATE TRIGGER trg_validate_consumption
+-- Fire *before* a consumption record is saved
+BEFORE INSERT ON BatchConsumption
+FOR EACH ROW
+BEGIN
+    -- 1. Create variables to hold the data we need to check
+    DECLARE v_expiration_date DATE;
+    DECLARE v_quantity_on_hand DECIMAL(10, 2);
+
+    -- 2. Look up the batch data from the 'parent' table
+    SELECT expiration_date, quantity_on_hand INTO v_expiration_date, v_quantity_on_hand
+    FROM IngredientBatch
     WHERE lot_number = NEW.ingredient_lot_number;
-    
-    -- Check if expired
-    IF exp_date IS NOT NULL AND exp_date < CURDATE() THEN
+
+    -- 3. CHECK 1: Is the lot expired?
+    IF CURDATE() > v_expiration_date THEN
+        -- If it is expired, stop the INSERT and throw a custom error.
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Cannot consume expired ingredient lot';
+        SET MESSAGE_TEXT = 'ERROR: Cannot consume an expired ingredient lot! Lot has expired.';
     END IF;
-END//
+    
+    -- 4. CHECK 2: Is there enough quantity?
+    IF v_quantity_on_hand < NEW.quantity_consumed THEN
+        -- If not enough stock, stop the INSERT and throw a custom error.
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'ERROR: Not enough quantity on hand. A-vailable: v_quantity_on_hand, Tried to consume: NEW.quantity_consumed';
+    END IF;
+    
+    -- If both checks pass, the trigger finishes and the INSERT proceeds.
+END;
+//
 
--- Trigger 3: Maintain On-Hand Inventory
--- This trigger automatically updates inventory when batches are received
--- Note: Consumption updates are handled in the application/procedure
+-- ============================================
+-- MAINTAIN ON-HAND TRIGGERS (NEWLY ADDED)
+-- ============================================
 
-DROP TRIGGER IF EXISTS trg_maintain_on_hand_receipt//
-CREATE TRIGGER trg_maintain_on_hand_receipt
-BEFORE INSERT ON Ingredient_Batches
+-- ---------------------------------------------------------------------
+-- Trigger 1: "Consumption"
+-- This trigger fires *after* a consumption record is inserted
+-- and SUBTRACTS the quantity from the ingredient batch.
+-- ---------------------------------------------------------------------
+DROP TRIGGER IF EXISTS trg_maintain_on_hand_CONSUME;
+//
+CREATE TRIGGER trg_maintain_on_hand_CONSUME
+-- We use AFTER INSERT. This now fires *after* our
+-- 'trg_validate_consumption' (BEFORE INSERT) has passed,
+-- so we know this subtraction is 100% safe.
+AFTER INSERT ON BatchConsumption
 FOR EACH ROW
 BEGIN
-    -- On insert, quantity_on_hand is set directly, so this trigger just validates
-    IF NEW.quantity_on_hand < 0 THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Quantity on hand cannot be negative';
-    END IF;
-END//
+    -- 'NEW' refers to the row that was just inserted
+    -- This UPDATE finds the matching IngredientBatch and subtracts
+    -- the consumed quantity from its on_hand balance.
+    UPDATE IngredientBatch
+    SET quantity_on_hand = quantity_on_hand - NEW.quantity_consumed
+    WHERE lot_number = NEW.ingredient_lot_number;
+END;
+//
 
--- ============================================
--- STORED PROCEDURES
--- ============================================
-
--- Procedure 1: Record Production Batch
--- Creates batch, consumes ingredient lots atomically, computes cost
-DROP PROCEDURE IF EXISTS RecordProductionBatch//
-CREATE PROCEDURE RecordProductionBatch(
-    IN p_batch_number VARCHAR(100),
-    IN p_product_id INT,
-    IN p_plan_id INT,
-    IN p_quantity_produced INT,
-    IN p_production_date DATE,
-    IN p_expiration_date DATE,
-    OUT p_total_cost DECIMAL(12,2),
-    OUT p_cost_per_unit DECIMAL(12,2),
-    OUT p_success BOOLEAN
-)
+-- ---------------------------------------------------------------------
+-- Trigger 2: "Adjustment"
+-- This trigger fires *after* a consumption record is deleted
+-- and ADDS the quantity *back* to the ingredient batch.
+-- ---------------------------------------------------------------------
+DROP TRIGGER IF EXISTS trg_maintain_on_hand_ADJUST;
+//
+CREATE TRIGGER trg_maintain_on_hand_ADJUST
+-- This fires after a row is successfully deleted
+AFTER DELETE ON BatchConsumption
+FOR EACH ROW
 BEGIN
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        SET p_success = FALSE;
-        RESIGNAL;
-    END;
-    
-    DECLARE v_total_cost DECIMAL(12,2) DEFAULT 0;
-    DECLARE v_cost_per_unit DECIMAL(12,2) DEFAULT 0;
-    DECLARE done INT DEFAULT FALSE;
-    DECLARE v_lot_number VARCHAR(100);
-    DECLARE v_quantity_used DECIMAL(10,2);
-    DECLARE v_cost_per_unit_lot DECIMAL(10,2);
-    DECLARE v_lot_cost DECIMAL(12,2);
-    
-    -- Cursor for batch consumption records
-    DECLARE cur_consumption CURSOR FOR
-        SELECT ingredient_lot_number, quantity_used
-        FROM Batch_Consumption
-        WHERE product_batch_number = p_batch_number;
-    
-    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
-    
-    START TRANSACTION;
-    
-    -- Calculate total cost from consumption records
-    OPEN cur_consumption;
-    read_loop: LOOP
-        FETCH cur_consumption INTO v_lot_number, v_quantity_used;
-        IF done THEN
-            LEAVE read_loop;
-        END IF;
-        
-        -- Get cost per unit for this lot
-        SELECT cost_per_unit INTO v_cost_per_unit_lot
-        FROM Ingredient_Batches
-        WHERE lot_number = v_lot_number;
-        
-        SET v_lot_cost = v_quantity_used * v_cost_per_unit_lot;
-        SET v_total_cost = v_total_cost + v_lot_cost;
-        
-        -- Update lot quantity
-        UPDATE Ingredient_Batches
-        SET quantity_on_hand = quantity_on_hand - v_quantity_used
-        WHERE lot_number = v_lot_number;
-        
-        -- Validate quantity
-        IF (SELECT quantity_on_hand FROM Ingredient_Batches WHERE lot_number = v_lot_number) < 0 THEN
-            SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Insufficient quantity in lot';
-        END IF;
-    END LOOP;
-    CLOSE cur_consumption;
-    
-    -- Calculate cost per unit
-    IF p_quantity_produced > 0 THEN
-        SET v_cost_per_unit = v_total_cost / p_quantity_produced;
-    END IF;
-    
-    -- Insert product batch
-    INSERT INTO Product_Batches (
-        batch_number, product_id, plan_id, quantity_produced,
-        total_cost, cost_per_unit, production_date, expiration_date
-    ) VALUES (
-        p_batch_number, p_product_id, p_plan_id, p_quantity_produced,
-        v_total_cost, v_cost_per_unit, p_production_date, p_expiration_date
-    );
-    
-    SET p_total_cost = v_total_cost;
-    SET p_cost_per_unit = v_cost_per_unit;
-    SET p_success = TRUE;
-    
-    COMMIT;
-END//
+    -- 'OLD' is a special keyword that refers to the row
+    -- that was just deleted.
+    -- This UPDATE finds the matching IngredientBatch and adds
+    -- the *previously consumed* quantity back to its on_hand balance.
+    UPDATE IngredientBatch
+    SET quantity_on_hand = quantity_on_hand + OLD.quantity_consumed
+    WHERE lot_number = OLD.ingredient_lot_number;
+END;
+//
 
--- Procedure 2: Trace Recall
--- Given ingredient ID or lot number, find affected product batches
-DROP PROCEDURE IF EXISTS TraceRecall//
-CREATE PROCEDURE TraceRecall(
-    IN p_identifier VARCHAR(100)
-)
-BEGIN
-    -- Try to determine if identifier is ingredient_id or lot_number
-    -- If it's numeric and short, assume ingredient_id; otherwise assume lot_number
-    
-    IF p_identifier REGEXP '^[0-9]+$' AND LENGTH(p_identifier) <= 5 THEN
-        -- Assume ingredient_id
-        SELECT DISTINCT
-            pb.batch_number,
-            p.product_name,
-            pb.production_date,
-            pb.quantity_produced
-        FROM Product_Batches pb
-        JOIN Products p ON pb.product_id = p.product_id
-        JOIN Batch_Consumption bc ON pb.batch_number = bc.product_batch_number
-        JOIN Ingredient_Batches ib ON bc.ingredient_lot_number = ib.lot_number
-        WHERE ib.ingredient_id = CAST(p_identifier AS UNSIGNED)
-           OR ib.ingredient_id IN (
-               SELECT child_ingredient_id
-               FROM Ingredient_Compositions
-               WHERE parent_ingredient_id = CAST(p_identifier AS UNSIGNED)
-           )
-        ORDER BY pb.production_date DESC;
-    ELSE
-        -- Assume lot_number
-        SELECT DISTINCT
-            pb.batch_number,
-            p.product_name,
-            pb.production_date,
-            pb.quantity_produced
-        FROM Product_Batches pb
-        JOIN Products p ON pb.product_id = p.product_id
-        JOIN Batch_Consumption bc ON pb.batch_number = bc.product_batch_number
-        WHERE bc.ingredient_lot_number = p_identifier
-        ORDER BY pb.production_date DESC;
-    END IF;
-END//
-
--- Procedure 3: Evaluate Health Risk
--- Checks for do-not-combine conflicts when creating a batch
-DROP PROCEDURE IF EXISTS EvaluateHealthRisk//
-CREATE PROCEDURE EvaluateHealthRisk(
-    IN p_batch_number VARCHAR(100),
-    OUT p_has_conflict BOOLEAN,
-    OUT p_conflict_count INT
+-- ---------------------------------------------------------------------
+-- Procedure: Evaluate Health Risk (FIXED for ERROR 1137)
+-- This procedure "flattens" a consumption list to all its
+-- atomic ingredients and checks them against the DoNotCombine table.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS Evaluate_Health_Risk;
+//
+CREATE PROCEDURE Evaluate_Health_Risk(
+    IN p_consumption_list JSON
 )
 BEGIN
     DECLARE v_conflict_count INT DEFAULT 0;
-    DECLARE v_error_msg VARCHAR(255);
-    
-    -- Get all ingredients in the batch (flattened one level)
-    -- Check for conflicts
-    SELECT COUNT(DISTINCT CONCAT(LEAST(dnc.ingredient1_id, dnc.ingredient2_id), 
-                                 '-', GREATEST(dnc.ingredient1_id, dnc.ingredient2_id)))
+
+    -- 1. Create temporary tables to hold our intermediate data.
+    CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Flattened_Atomics (
+        ingredient_id VARCHAR(20) PRIMARY KEY
+    );
+    TRUNCATE TABLE Temp_Flattened_Atomics;
+
+    CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Affected_Lots (
+        lot_number VARCHAR(255) PRIMARY KEY
+    );
+    TRUNCATE TABLE Temp_Affected_Lots;
+
+    -- =================================================================
+    -- FIX FOR ERROR 1137: Create a SECOND identical temp table
+    -- =================================================================
+    CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Flattened_Atomics_2 (
+        ingredient_id VARCHAR(20) PRIMARY KEY
+    );
+    TRUNCATE TABLE Temp_Flattened_Atomics_2;
+
+
+    -- 2. Get all LOTS from the JSON
+    INSERT INTO Temp_Affected_Lots (lot_number)
+    SELECT lot FROM JSON_TABLE(p_consumption_list, '$[*]' COLUMNS (
+        lot VARCHAR(255) PATH '$.lot'
+    )) AS jt;
+
+    -- 3. Get all ATOMIC ingredients from those lots and add them to our list
+    INSERT IGNORE INTO Temp_Flattened_Atomics (ingredient_id)
+    SELECT
+        ib.ingredient_id
+    FROM
+        IngredientBatch ib
+    JOIN
+        Temp_Affected_Lots al ON ib.lot_number = al.lot_number
+    JOIN
+        Ingredient i ON ib.ingredient_id = i.ingredient_id
+    WHERE
+        i.ingredient_type = 'ATOMIC';
+
+    -- 4. Get all materials from all COMPOUND ingredients and add them (the "flattening")
+    INSERT IGNORE INTO Temp_Flattened_Atomics (ingredient_id)
+    SELECT
+        fm.material_ingredient_id
+    FROM
+        IngredientBatch ib
+    JOIN
+        Temp_Affected_Lots al ON ib.lot_number = al.lot_number
+    JOIN
+        Ingredient i ON ib.ingredient_id = i.ingredient_id
+    -- Find the *active* formulation for this batch (based on intake date)
+    JOIN
+        Formulation f ON f.ingredient_id = ib.ingredient_id
+        AND f.supplier_id = ib.supplier_id
+        AND ib.intake_date BETWEEN f.valid_from_date AND COALESCE(f.valid_to_date, '9999-12-31')
+    -- Find the materials for that formulation
+    JOIN
+        FormulationMaterials fm ON fm.formulation_id = f.formulation_id
+    WHERE
+        i.ingredient_type = 'COMPOUND';
+
+    -- =================================================================
+    -- FIX FOR ERROR 1137: Copy data from t1 into t2
+    -- =================================================================
+    INSERT INTO Temp_Flattened_Atomics_2 (ingredient_id)
+    SELECT ingredient_id FROM Temp_Flattened_Atomics;
+
+
+    -- 5. Check for conflicts
+    -- We self-join our list of atomics against the DoNotCombine table
+    SELECT COUNT(*)
     INTO v_conflict_count
-    FROM Product_Batches pb
-    JOIN Recipe_Plans rp ON pb.plan_id = rp.plan_id
-    JOIN Recipe_Ingredients ri1 ON rp.plan_id = ri1.plan_id
-    JOIN Recipe_Ingredients ri2 ON rp.plan_id = ri2.plan_id
-    JOIN Ingredients i1 ON ri1.ingredient_id = i1.ingredient_id
-    JOIN Ingredients i2 ON ri2.ingredient_id = i2.ingredient_id
-    LEFT JOIN Ingredient_Compositions ic1 ON i1.ingredient_id = ic1.parent_ingredient_id
-    LEFT JOIN Ingredient_Compositions ic2 ON i2.ingredient_id = ic2.parent_ingredient_id
-    JOIN Do_Not_Combine dnc ON (
-        (COALESCE(ic1.child_ingredient_id, ri1.ingredient_id) = dnc.ingredient1_id
-         AND COALESCE(ic2.child_ingredient_id, ri2.ingredient_id) = dnc.ingredient2_id)
-        OR
-        (COALESCE(ic1.child_ingredient_id, ri1.ingredient_id) = dnc.ingredient2_id
-         AND COALESCE(ic2.child_ingredient_id, ri2.ingredient_id) = dnc.ingredient1_id)
-    )
-    WHERE pb.batch_number = p_batch_number
-      AND ri1.ingredient_id != ri2.ingredient_id;
+    FROM
+        Temp_Flattened_Atomics AS t1
+    JOIN
+        DoNotCombine AS dnc ON t1.ingredient_id = dnc.ingredient_a_id
+    -- =================================================================
+    -- FIX FOR ERROR 1137: Join against the *second* temp table
+    -- =================================================================
+    JOIN
+        Temp_Flattened_Atomics_2 AS t2 ON dnc.ingredient_b_id = t2.ingredient_id;
     
-    SET p_conflict_count = v_conflict_count;
-    SET p_has_conflict = (v_conflict_count > 0);
-    
-    IF p_has_conflict THEN
-        SET v_error_msg = CONCAT('Health risk detected: ', v_conflict_count, ' incompatible ingredient pair(s) found');
+    -- We also check the reverse pair (B -> A)
+    SET v_conflict_count = v_conflict_count + (
+        SELECT COUNT(*)
+        FROM
+            Temp_Flattened_Atomics AS t1
+        JOIN
+            DoNotCombine AS dnc ON t1.ingredient_id = dnc.ingredient_b_id
+        -- =================================================================
+        -- FIX FOR ERROR 1137: Join against the *second* temp table
+        -- =================================================================
+        JOIN
+            Temp_Flattened_Atomics_2 AS t2 ON dnc.ingredient_a_id = t2.ingredient_id
+    );
+
+    -- 6. Block or Allow
+    IF v_conflict_count > 0 THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = v_error_msg;
+        SET MESSAGE_TEXT = 'ERROR: Health risk detected! Incompatible ingredients found in batch.';
     END IF;
-END//
+    -- If count is 0, the procedure finishes successfully.
+    -- Temporary tables are dropped automatically when the session ends.
+
+END;
+//
+
+-- ---------------------------------------------------------------------
+-- Procedure: Record Production Batch
+-- This is the main "engine" of the application. It atomically
+-- creates a new product batch and consumes all specified ingredients.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS Record_Production_Batch;
+//
+CREATE PROCEDURE Record_Production_Batch(
+    -- IN parameters are data we pass *into* the procedure
+    IN p_product_id VARCHAR(20),
+    IN p_manufacturer_id VARCHAR(20),
+    IN p_manufacturer_batch_id VARCHAR(100),
+    IN p_produced_quantity INT,
+    IN p_expiration_date DATE,
+    IN p_recipe_id_used INT,
+    IN p_consumption_list JSON -- e.g., '[{"lot": "106-20-B0006", "qty": 600}, ...]'
+)
+BEGIN
+    -- == 1. DECLARE VARIABLES ==
+    -- We'll store the calculated cost and new lot number here
+    DECLARE v_total_cost DECIMAL(10, 2) DEFAULT 0.00;
+    DECLARE v_new_lot_number VARCHAR(255);
+
+    -- == 2. ERROR HANDLER ==
+    -- This is the "safety net". If *any* SQL error occurs (like
+    -- our triggers failing), this handler will catch it.
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        -- An error occurred! Undo *all* changes.
+        ROLLBACK;
+        -- Pass the error message back up to the Python app
+        RESIGNAL;
+    END;
+
+    -- == 3. START TRANSACTION ==
+    -- This is the "safety bubble". All or nothing.
+    START TRANSACTION;
+    
+    -- == 4. CALCULATE TOTAL COST ==
+    -- We use JSON_TABLE to turn the JSON array into a temporary table
+    -- which we can JOIN with IngredientBatch to calculate the cost.
+    SELECT SUM(jt.qty * ib.per_unit_cost)
+    INTO v_total_cost
+    FROM 
+      JSON_TABLE(p_consumption_list, '$[*]' COLUMNS (
+          lot VARCHAR(255) PATH '$.lot',
+          qty DECIMAL(10, 2) PATH '$.qty'
+      )) AS jt
+    JOIN 
+      IngredientBatch AS ib ON ib.lot_number = jt.lot;
+
+    -- == 5. CREATE THE FINISHED GOODS (PRODUCT BATCH) ==
+    -- We insert the new product batch into the table.
+    -- Our 'trg_compute_product_lot_number' will fire automatically.
+    INSERT INTO ProductBatch
+      (product_id, manufacturer_id, manufacturer_batch_id, 
+       produced_quantity, production_date, expiration_date, 
+       recipe_id_used, total_batch_cost)
+    VALUES
+      (p_product_id, p_manufacturer_id, p_manufacturer_batch_id,
+       p_produced_quantity, CURDATE(), p_expiration_date,
+       p_recipe_id_used, v_total_cost);
+
+    -- == 6. CONSUME THE INGREDIENTS ==
+    -- We need the new lot number to link to the consumption records.
+    -- We can re-build it because we have all the parts.
+    SET v_new_lot_number = CONCAT(p_product_id, '-', p_manufacturer_id, '-', p_manufacturer_batch_id);
+
+    -- Now, insert all consumption records.
+    -- Our 'trg_validate_consumption' (BEFORE) and
+    -- 'trg_maintain_on_hand_CONSUME' (AFTER) will fire
+    -- automatically for *each row* this INSERT creates.
+    INSERT INTO BatchConsumption
+      (product_lot_number, ingredient_lot_number, quantity_consumed)
+    SELECT
+      v_new_lot_number, -- The new lot number we just created
+      jt.lot,           -- The 'lot' column from the JSON
+      jt.qty            -- The 'qty' column from the JSON
+    FROM 
+      JSON_TABLE(p_consumption_list, '$[*]' COLUMNS (
+          lot VARCHAR(255) PATH '$.lot',
+          qty DECIMAL(10, 2) PATH '$.qty'
+      )) AS jt;
+
+    -- == 7. COMMIT ==
+    -- If we made it this far, it means no errors occurred.
+    -- We exit the "safety bubble" and make all changes permanent.
+    COMMIT;
+
+END;
+//
+
+-- ---------------------------------------------------------------------
+-- Procedure: Trace Recall
+-- This procedure finds all product batches affected by a
+-- specific recalled ingredient lot, within a 20-day window.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS Trace_Recall;
+//
+CREATE PROCEDURE Trace_Recall(
+    IN p_ingredient_lot_number VARCHAR(255), -- The lot ID to recall
+    IN p_recall_date DATE                    -- The date the recall was issued
+)
+BEGIN
+    -- This query joins the consumption link to the batch and product tables.
+    SELECT
+        pb.lot_number AS affected_product_lot,
+        p.name AS product_name,
+        pb.production_date,
+        pb.expiration_date,
+        pb.produced_quantity
+    FROM
+        BatchConsumption AS bc
+    JOIN
+        ProductBatch AS pb ON bc.product_lot_number = pb.lot_number
+    JOIN
+        Product AS p ON pb.product_id = p.product_id
+    WHERE
+        -- 1. Find the specific recalled ingredient lot
+        bc.ingredient_lot_number = p_ingredient_lot_number
+        
+        -- 2. Filter by the 20-day time window
+        -- We check if the production_date (a DATETIME) is between
+        -- 20 days *before* the recall date and the recall date itself.
+        AND DATE(pb.production_date) 
+            BETWEEN (p_recall_date - INTERVAL 20 DAY) AND p_recall_date;
+
+END;
+//
 
 DELIMITER ;
-
--- ============================================
--- VIEWS
--- ============================================
-
--- View 1: Current Active Supplier Formulations
-DROP VIEW IF EXISTS v_active_supplier_formulations;
-CREATE VIEW v_active_supplier_formulations AS
-SELECT 
-    f.formulation_id,
-    f.supplier_id,
-    s.supplier_name,
-    f.ingredient_id,
-    i.ingredient_name,
-    f.name as formulation_name,
-    fv.version_id,
-    fv.version_no,
-    fv.pack_size,
-    fv.unit_price,
-    fv.effective_from,
-    fv.effective_to
-FROM Formulations f
-JOIN Suppliers s ON f.supplier_id = s.supplier_id
-JOIN Ingredients i ON f.ingredient_id = i.ingredient_id
-JOIN Formulation_Versions fv ON f.formulation_id = fv.formulation_id
-WHERE fv.is_active = TRUE
-  AND (fv.effective_to IS NULL OR fv.effective_to >= CURDATE())
-  AND fv.effective_from <= CURDATE();
-
--- View 2: Flattened Product BOM for Labeling
-DROP VIEW IF EXISTS v_flattened_product_bom;
-CREATE VIEW v_flattened_product_bom AS
-SELECT 
-    p.product_id,
-    p.product_name,
-    rp.plan_id,
-    rp.version_number,
-    COALESCE(ic.child_ingredient_id, ri.ingredient_id) as ingredient_id,
-    COALESCE(ci.ingredient_name, i.ingredient_name) as ingredient_name,
-    SUM(ri.quantity_required * COALESCE(ic.quantity_required, 1)) as total_quantity_oz
-FROM Products p
-JOIN Recipe_Plans rp ON p.product_id = rp.product_id
-JOIN Recipe_Ingredients ri ON rp.plan_id = ri.plan_id
-JOIN Ingredients i ON ri.ingredient_id = i.ingredient_id
-LEFT JOIN Ingredient_Compositions ic ON i.ingredient_id = ic.parent_ingredient_id
-LEFT JOIN Ingredients ci ON ic.child_ingredient_id = ci.ingredient_id
-WHERE rp.is_active = TRUE
-GROUP BY p.product_id, p.product_name, rp.plan_id, rp.version_number,
-         COALESCE(ic.child_ingredient_id, ri.ingredient_id),
-         COALESCE(ci.ingredient_name, i.ingredient_name)
-ORDER BY p.product_id, total_quantity_oz DESC;
-
--- View 3: Health-Risk Rule Violations (Last 30 Days)
-DROP VIEW IF EXISTS v_health_risk_violations;
-CREATE VIEW v_health_risk_violations AS
-SELECT DISTINCT
-    pb.batch_number,
-    pb.production_date,
-    p.product_name,
-    dnc.ingredient1_id,
-    i1.ingredient_name as ingredient1_name,
-    dnc.ingredient2_id,
-    i2.ingredient_name as ingredient2_name,
-    dnc.reason
-FROM Product_Batches pb
-JOIN Products p ON pb.product_id = p.product_id
-JOIN Recipe_Plans rp ON pb.plan_id = rp.plan_id
-JOIN Recipe_Ingredients ri1 ON rp.plan_id = ri1.plan_id
-JOIN Recipe_Ingredients ri2 ON rp.plan_id = ri2.plan_id
-JOIN Ingredients i1 ON ri1.ingredient_id = i1.ingredient_id
-JOIN Ingredients i2 ON ri2.ingredient_id = i2.ingredient_id
-LEFT JOIN Ingredient_Compositions ic1 ON i1.ingredient_id = ic1.parent_ingredient_id
-LEFT JOIN Ingredient_Compositions ic2 ON i2.ingredient_id = ic2.parent_ingredient_id
-JOIN Do_Not_Combine dnc ON (
-    (COALESCE(ic1.child_ingredient_id, ri1.ingredient_id) = dnc.ingredient1_id
-     AND COALESCE(ic2.child_ingredient_id, ri2.ingredient_id) = dnc.ingredient2_id)
-    OR
-    (COALESCE(ic1.child_ingredient_id, ri1.ingredient_id) = dnc.ingredient2_id
-     AND COALESCE(ic2.child_ingredient_id, ri2.ingredient_id) = dnc.ingredient1_id)
-)
-WHERE pb.production_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-  AND ri1.ingredient_id != ri2.ingredient_id
-ORDER BY pb.production_date DESC;
-
-
