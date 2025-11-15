@@ -50,7 +50,7 @@ CREATE TABLE Ingredient (
     ingredient_id VARCHAR(20) PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
     -- This 'type' is critical for the "no grandchildren" rule
-    ingredient_type ENUM('atomic', 'compound') NOT NULL
+    ingredient_type ENUM('ATOMIC', 'COMPOUND') NOT NULL
 );
 
 CREATE TABLE Product (
