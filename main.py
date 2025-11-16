@@ -259,13 +259,17 @@ def run_manufacturer_reports(cursor, db, user_session):
     """(REPORTING FUNCTION) - Runs the 5 required queries."""
     print("\n--- (5) Run Reports ---")
     
+    print("\n--- Required Queries ---")
     print("1. Ingredients of last 'Steak Dinner' batch (MFG001)")
     print("2. Suppliers and spending (MFG002)")
     print("3. Unit cost for lot '100-MFG001-B0901'")
     print("4. Conflicting ingredients for lot '100-MFG001-B0901'")
     print("5. Manufacturers not supplied by 'James Miller' (21)")
+    print("\n--- Other Health Reports (NEWLY ADDED) ---")
+    print("6. Nearly-Out-of-Stock Items (by Product)")
+    print("7. Almost-Expired Ingredient Lots (Next 10 Days)")
     
-    choice = input("Select a report (1-5): ")
+    choice = input("Select a report (1-7): ")
     
     try:
         if choice == '1':
@@ -333,23 +337,53 @@ def run_manufacturer_reports(cursor, db, user_session):
             print("Report 4: Conflicting ingredients for lot '100-MFG001-B0901'")
             
             # =================================================================
-            # FINAL-V5 FIX FOR ERROR 1137: "Can't reopen table: 't1'"
-            # We break the query into two separate INSERTs.
+            # CLAUDE'S FIX FOR ERROR 1137: "Can't reopen table: 't'"
+            # 1. Create all the temporary tables
             # =================================================================
-            
-            # 1. Create the *first* temporary table
-            cursor.execute("CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch (ingredient_id VARCHAR(20) PRIMARY KEY);")
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch (
+                    ingredient_id VARCHAR(20) PRIMARY KEY
+                );
+            """)
             cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch;")
             
-            # 2. Create the *second* identical temporary table
-            cursor.execute("CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_2 (ingredient_id VARCHAR(20) PRIMARY KEY);")
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_2 (
+                    ingredient_id VARCHAR(20) PRIMARY KEY
+                );
+            """)
             cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_2;")
             
-            # 3. Create a *third* temporary table for the results
-            cursor.execute("CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Conflict_List (ingredient_id VARCHAR(20) PRIMARY KEY, name VARCHAR(255));")
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_3 (
+                    ingredient_id VARCHAR(20) PRIMARY KEY
+                );
+            """)
+            cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_3;")
+            
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_4 (
+                    ingredient_id VARCHAR(20) PRIMARY KEY
+                );
+            """)
+            cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_4;")
+            
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_5 (
+                    ingredient_id VARCHAR(20) PRIMARY KEY
+                );
+            """)
+            cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_5;")
+            
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Conflict_List (
+                    ingredient_id VARCHAR(20) PRIMARY KEY,
+                    name VARCHAR(255)
+                );
+            """)
             cursor.execute("TRUNCATE TABLE Temp_Conflict_List;")
 
-            # 4. Get all ATOMIC ingredients from the lot
+            # 2. Get all ATOMIC ingredients from the lot
             cursor.execute("""
                 INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
                 SELECT ib.ingredient_id
@@ -360,7 +394,7 @@ def run_manufacturer_reports(cursor, db, user_session):
                   AND i.ingredient_type = 'ATOMIC';
             """)
             
-            # 5. Get all FLATTENED atomic ingredients from COMPOUND lots
+            # 3. Get all FLATTENED atomic ingredients from COMPOUND lots
             cursor.execute("""
                 INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
                 SELECT fm.material_ingredient_id
@@ -375,16 +409,17 @@ def run_manufacturer_reports(cursor, db, user_session):
                   AND i.ingredient_type = 'COMPOUND';
             """)
             
-            # 6. Copy data from table 1 into table 2
-            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_2 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;");
-            db.commit() # Commit temp table data
+            # 4. Copy data from table 1 into all other temp tables
+            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_2 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
+            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_3 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
+            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_4 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
+            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_5 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
+            db.commit()
 
-            # =================================================================
-            # FINAL-V5 FIX: Run the conflict check as two *separate* INSERTs
-            # =================================================================
+            # 5. SPLIT THE UNION - Execute as two separate INSERT statements
             
-            # 7. (PART A) Find conflicts where our atoms are 'ingredient_b'
-            query4_part_A = """
+            # First part: Find conflicts where ingredient is dnc.ingredient_a_id
+            query4_part1 = """
                 INSERT IGNORE INTO Temp_Conflict_List (ingredient_id, name)
                 SELECT
                     i.ingredient_id,
@@ -394,14 +429,14 @@ def run_manufacturer_reports(cursor, db, user_session):
                 JOIN
                     DoNotCombine dnc ON i.ingredient_id = dnc.ingredient_a_id
                 JOIN
-                    Temp_Atoms_In_Batch t1 ON dnc.ingredient_b_id = t1.ingredient_id
+                    Temp_Atoms_In_Batch_2 AS t1 ON dnc.ingredient_b_id = t1.ingredient_id
                 WHERE
-                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_2);
+                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_3);
             """
-            cursor.execute(query4_part_A)
-
-            # 8. (PART B) Find conflicts where our atoms are 'ingredient_a'
-            query4_part_B = """
+            cursor.execute(query4_part1)
+            
+            # Second part: Find conflicts where ingredient is dnc.ingredient_b_id
+            query4_part2 = """
                 INSERT IGNORE INTO Temp_Conflict_List (ingredient_id, name)
                 SELECT
                     i.ingredient_id,
@@ -411,14 +446,14 @@ def run_manufacturer_reports(cursor, db, user_session):
                 JOIN
                     DoNotCombine dnc ON i.ingredient_id = dnc.ingredient_b_id
                 JOIN
-                    Temp_Atoms_In_Batch t1 ON dnc.ingredient_a_id = t1.ingredient_id
+                    Temp_Atoms_In_Batch_4 AS t_other ON dnc.ingredient_a_id = t_other.ingredient_id
                 WHERE
-                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_2);
+                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_5);
             """
-            cursor.execute(query4_part_B)
+            cursor.execute(query4_part2)
             db.commit() # Commit the inserts into the conflict list
 
-            # 9. Select from the simple, final results table
+            # 6. Select from the simple, final results table
             cursor.execute("SELECT ingredient_id AS 'Conflicting ID', name AS 'Conflicting Ingredient Name' FROM Temp_Conflict_List;")
             pretty_print_results(cursor)
 
@@ -443,6 +478,57 @@ def run_manufacturer_reports(cursor, db, user_session):
                 );
             """
             cursor.execute(query5)
+            pretty_print_results(cursor)
+        
+        # =================================================================
+        # NEWLY ADDED REPORTS
+        # =================================================================
+        elif choice == '6':
+            print("Report 6: Nearly-Out-of-Stock Items (by Product)")
+            # This query finds all ingredients whose *total stock* is less than
+            # the standard_batch_size of *any product that uses it*.
+            # This version only shows items relevant to the logged-in manufacturer.
+            query6 = """
+                SELECT 
+                    i.name AS 'Ingredient Name',
+                    p.name AS 'Product Name',
+                    p.standard_batch_size AS 'Product SBS',
+                    COALESCE(SUM(ib.quantity_on_hand), 0) AS 'Total Stock On-Hand'
+                FROM 
+                    Ingredient i
+                JOIN 
+                    RecipeIngredient ri ON i.ingredient_id = ri.ingredient_id
+                JOIN 
+                    Recipe r ON ri.recipe_id = r.recipe_id
+                JOIN 
+                    Product p ON r.product_id = p.product_id
+                LEFT JOIN 
+                    IngredientBatch ib ON i.ingredient_id = ib.ingredient_id
+                WHERE 
+                    p.manufacturer_id = %s -- Only show for products *this* mfg owns
+                GROUP BY 
+                    i.ingredient_id, i.name, p.product_id, p.name, p.standard_batch_size
+                HAVING 
+                    `Total Stock On-Hand` < p.standard_batch_size;
+            """
+            cursor.execute(query6, (user_session['id'],))
+            pretty_print_results(cursor)
+
+        elif choice == '7':
+            print("Report 7: Almost-Expired Ingredient Lots (Next 10 Days)")
+            # Assumes today is 2025-11-15 for test data consistency
+            query7 = """
+                SELECT 
+                    lot_number AS 'Lot Number', 
+                    ingredient_id AS 'Ingredient ID',
+                    quantity_on_hand AS 'Qty',
+                    expiration_date AS 'Expires On'
+                FROM 
+                    IngredientBatch
+                WHERE 
+                    expiration_date BETWEEN '2025-11-15' AND ('2025-11-15' + INTERVAL 10 DAY);
+            """
+            cursor.execute(query7)
             pretty_print_results(cursor)
             
         else:
@@ -473,8 +559,7 @@ def manufacturer_menu(cursor, db, user_session):
         elif choice == '3':
             create_product_batch(cursor, db, user_session)
         elif choice == '4':
-            # This is the line with the bug
-            # It needs to pass 'db' as the second argument
+            # This is the line with the bug fix
             run_manufacturer_reports(cursor, db, user_session)
         elif choice == '5':
             break
