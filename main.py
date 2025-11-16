@@ -3,7 +3,7 @@ import getpass
 import json
 import sys
 from datetime import date, timedelta
-from tabulate import tabulate # Import at the top
+from tabulate import tabulate
 
 # --- Database Configuration ---
 DB_CONFIG = {
@@ -14,18 +14,12 @@ DB_CONFIG = {
 
 # --- Helper Functions ---
 def pretty_print_results(cursor):
-    """
-    Helper function to print query results in a nice table.
-    FIXED: It automatically uses the column names (AS clauses)
-    from your SQL query as the headers.
-    """
+    """Print query results in a formatted table."""
     results = cursor.fetchall()
     if not results:
         print("No results found.")
         return
     
-    # "headers='keys'" tells tabulate to use the dictionary keys
-    # (i.e., your SQL 'AS' clauses) as the table headers.
     print(tabulate(results, headers="keys", tablefmt="grid"))
 
 # --- Main Application ---
@@ -58,7 +52,7 @@ def login(cursor):
             return {
                 "username": username,
                 "role": role,
-                "id": user_id  # This will be 'MFG001' or '20', etc.
+                "id": user_id
             }
         else:
             print("Login failed. Invalid username or password.")
@@ -72,7 +66,7 @@ def login(cursor):
 # =====================================================================
 
 def create_product_type(cursor, db, user_session):
-    """(SIMPLE FUNCTION) - Creates a new product type."""
+    """Create a new product type."""
     print("\n--- (1) Create & Manage Product Types ---")
     try:
         product_id = input("Enter new Product ID (e.g., 102): ")
@@ -97,7 +91,7 @@ def create_product_type(cursor, db, user_session):
         print("Error: Standard batch size must be an integer.")
 
 def create_recipe_plan(cursor, db, user_session):
-    """(SIMPLE FUNCTION) - Creates a new (versioned) recipe."""
+    """Create a new versioned recipe."""
     print("\n--- (2) Create & Update Recipe Plans (Versioned) ---")
     try:
         product_id = input("Enter Product ID to create a recipe for (e.g., 100): ")
@@ -141,7 +135,7 @@ def create_recipe_plan(cursor, db, user_session):
         print("Error: Quantity must be a number.")
 
 def create_product_batch(cursor, db, user_session):
-    """(BOSS LEVEL FUNCTION) - This is the most complex workflow."""
+    """Create a new product batch with FEFO ingredient allocation."""
     print("\n--- (3) Create Product Batch (Production Posting) ---")
     
     try:
@@ -178,7 +172,7 @@ def create_product_batch(cursor, db, user_session):
 
         # --- Step 4 & 5: Calculate Totals & Run FEFO Logic ---
         print("Calculating inventory requirements...")
-        consumption_plan = [] # This will become our JSON
+        consumption_plan = []
         
         for ingredient in recipe_ingredients:
             ing_id = ingredient['ingredient_id']
@@ -203,13 +197,13 @@ def create_product_batch(cursor, db, user_session):
                 print("Batch creation cancelled.")
                 return
 
-            # --- This is the core FEFO loop ---
+            # FEFO allocation loop
             for lot in available_lots:
                 lot_number = lot['lot_number']
                 lot_qty = lot['quantity_on_hand']
 
                 if total_needed <= 0:
-                    break # We have enough of this ingredient
+                    break
                 
                 consume_qty = min(lot_qty, total_needed)
                 consumption_plan.append({"lot": lot_number, "qty": float(consume_qty)})
@@ -242,7 +236,7 @@ def create_product_batch(cursor, db, user_session):
             json_string
         )
         
-        # This is how you call the procedure and catch errors!
+        # Call the production batch procedure
         cursor.callproc('Record_Production_Batch', args)
         db.commit()
         print("\n*** SUCCESS: Product batch created! ***")
@@ -274,8 +268,6 @@ def run_manufacturer_reports(cursor, db, user_session):
     try:
         if choice == '1':
             print("Report 1: Last batch of Steak Dinner (100) by MFG001")
-            # FIXED QUERY: This query now finds the MAX date first,
-            # then finds all ingredients for the batch(es) with that date.
             query1 = """
                 SELECT
                     bc.ingredient_lot_number AS 'Ingredient Lot',
@@ -336,10 +328,6 @@ def run_manufacturer_reports(cursor, db, user_session):
         elif choice == '4':
             print("Report 4: Conflicting ingredients for lot '100-MFG001-B0901'")
             
-            # =================================================================
-            # CLAUDE'S FIX FOR ERROR 1137: "Can't reopen table: 't'"
-            # 1. Create all the temporary tables
-            # =================================================================
             cursor.execute("""
                 CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch (
                     ingredient_id VARCHAR(20) PRIMARY KEY
@@ -383,7 +371,7 @@ def run_manufacturer_reports(cursor, db, user_session):
             """)
             cursor.execute("TRUNCATE TABLE Temp_Conflict_List;")
 
-            # 2. Get all ATOMIC ingredients from the lot
+            # Get all ATOMIC ingredients from the lot
             cursor.execute("""
                 INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
                 SELECT ib.ingredient_id
@@ -394,7 +382,7 @@ def run_manufacturer_reports(cursor, db, user_session):
                   AND i.ingredient_type = 'ATOMIC';
             """)
             
-            # 3. Get all FLATTENED atomic ingredients from COMPOUND lots
+            # Get all FLATTENED atomic ingredients from COMPOUND lots
             cursor.execute("""
                 INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
                 SELECT fm.material_ingredient_id
@@ -409,16 +397,14 @@ def run_manufacturer_reports(cursor, db, user_session):
                   AND i.ingredient_type = 'COMPOUND';
             """)
             
-            # 4. Copy data from table 1 into all other temp tables
+            # Replicate data across temporary tables
             cursor.execute("INSERT INTO Temp_Atoms_In_Batch_2 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
             cursor.execute("INSERT INTO Temp_Atoms_In_Batch_3 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
             cursor.execute("INSERT INTO Temp_Atoms_In_Batch_4 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
             cursor.execute("INSERT INTO Temp_Atoms_In_Batch_5 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
             db.commit()
 
-            # 5. SPLIT THE UNION - Execute as two separate INSERT statements
-            
-            # First part: Find conflicts where ingredient is dnc.ingredient_a_id
+            # Find conflicting ingredients using DoNotCombine rules
             query4_part1 = """
                 INSERT IGNORE INTO Temp_Conflict_List (ingredient_id, name)
                 SELECT
@@ -451,9 +437,8 @@ def run_manufacturer_reports(cursor, db, user_session):
                     i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_5);
             """
             cursor.execute(query4_part2)
-            db.commit() # Commit the inserts into the conflict list
+            db.commit()
 
-            # 6. Select from the simple, final results table
             cursor.execute("SELECT ingredient_id AS 'Conflicting ID', name AS 'Conflicting Ingredient Name' FROM Temp_Conflict_List;")
             pretty_print_results(cursor)
 
@@ -485,9 +470,7 @@ def run_manufacturer_reports(cursor, db, user_session):
         # =================================================================
         elif choice == '6':
             print("Report 6: Nearly-Out-of-Stock Items (by Product)")
-            # This query finds all ingredients whose *total stock* is less than
-            # the standard_batch_size of *any product that uses it*.
-            # This version only shows items relevant to the logged-in manufacturer.
+            # Find ingredients with stock below standard batch size
             query6 = """
                 SELECT 
                     i.name AS 'Ingredient Name',
@@ -559,7 +542,6 @@ def manufacturer_menu(cursor, db, user_session):
         elif choice == '3':
             create_product_batch(cursor, db, user_session)
         elif choice == '4':
-            # This is the line with the bug fix
             run_manufacturer_reports(cursor, db, user_session)
         elif choice == '5':
             break
@@ -593,7 +575,7 @@ def manage_formulations(cursor, db, user_session):
         
         db.commit()
         print("\n*** SUCCESS: New formulation created! ***")
-        print("Note: You may now need to define its materials if it's a compound ingredient.")
+        print("If this is a compound ingredient, you may define its materials next.")
 
     except mysql.connector.Error as err:
         db.rollback()
@@ -649,8 +631,7 @@ def create_supplier_batch(cursor, db, user_session):
     try:
         ingredient_id = input("Enter Ingredient ID: ")
         
-        # Access Control Check: Does this supplier actually supply this ingredient?
-        # We check the Formulation table to see if an "offer" exists.
+        # Check if supplier has an active formulation for this ingredient
         cursor.execute("""
             SELECT 1 FROM Formulation 
             WHERE supplier_id = %s 
@@ -667,13 +648,12 @@ def create_supplier_batch(cursor, db, user_session):
         cost = float(input("Enter Per-Unit Cost (e.g., 0.10): "))
         exp_date_str = input("Enter Expiration Date (YYYY-MM-DD): ")
         
-        # Python Check (90-day rule):
-        # We'll assume "today" is Nov 15, 2025 for consistency with sample data logic
+        # Enforce 90-day minimum shelf life
         intake_date = date(2025, 11, 15)
         expiration_date = date.fromisoformat(exp_date_str)
         if (expiration_date - intake_date).days < 90:
-           print(f"Error: Expiration date ({exp_date_str}) must be at least 90 days from today ({intake_date}).")
-           return
+            print(f"Error: Expiration date ({exp_date_str}) must be at least 90 days from today ({intake_date}).")
+            return
            
         query = """
             INSERT INTO IngredientBatch 
@@ -727,10 +707,9 @@ def generate_ingredient_list(cursor, db, user_session):
     try:
         product_id = input("Enter Product ID (e.g., 100): ")
         
-        # This query is a simplified version of the health risk one.
-        # It finds the active recipe, then unnests compound ingredients.
+        # Query the active recipe and flatten ingredients
         
-        # 1. Get active recipe
+        # Get active recipe
         cursor.execute("SELECT recipe_id FROM Recipe WHERE product_id = %s AND is_active = 1 LIMIT 1", (product_id,))
         recipe_result = cursor.fetchone()
         if not recipe_result:
@@ -739,7 +718,7 @@ def generate_ingredient_list(cursor, db, user_session):
         
         recipe_id = recipe_result['recipe_id']
 
-        # 2. Get all ATOMIC ingredients from the recipe
+        # Get all ATOMIC ingredients from the recipe
         query_atomic = """
             SELECT i.name AS name, ri.quantity AS quantity
             FROM RecipeIngredient ri
@@ -747,9 +726,7 @@ def generate_ingredient_list(cursor, db, user_session):
             WHERE ri.recipe_id = %s AND i.ingredient_type = 'ATOMIC'
         """
         
-        # 3. Get all FLATTENED materials from COMPOUND ingredients
-        # Note: This is complex. It assumes the *first* valid formulation.
-        # A more robust solution would be needed for multiple suppliers.
+        # Get all FLATTENED materials from COMPOUND ingredients
         query_compound = """
             SELECT 
                 i_mat.name AS name, 
@@ -782,11 +759,10 @@ def generate_ingredient_list(cursor, db, user_session):
             ingredients.append({'name': item['name'], 'quantity': item['total_quantity']})
 
         
-        # We need to sum duplicates in Python
+        # Sum duplicate ingredients
         final_list = {}
         for item in ingredients:
             name = item['name']
-            # We need to get the key 'quantity' or 'total_quantity'
             qty = item.get('quantity') or item.get('total_quantity', 0)
             if name in final_list:
                 final_list[name] += qty

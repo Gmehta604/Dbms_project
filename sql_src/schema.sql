@@ -62,8 +62,7 @@ CREATE TABLE Product (
     -- FK to establish product "ownership" by a manufacturer
     manufacturer_id VARCHAR(20) NOT NULL,
     
-    -- Rule: We must store this to check for "integer multiple" production
-    -- Rule: Also used for the "nearly-out-of-stock" report
+    -- Standard batch size for production validation
     standard_batch_size INT NOT NULL CHECK (standard_batch_size > 0),
     
     FOREIGN KEY (category_id) REFERENCES Category(category_id),
@@ -99,7 +98,7 @@ CREATE TABLE RecipeIngredient (
 -- 3. SUPPLIER FORMULATIONS (Supplier-specific Ingredient definitions)
 -- =====================================================================
 
--- This is the supplier's "offer" for an ingredient
+-- Supplier formulation (ingredient offering)
 CREATE TABLE Formulation (
     formulation_id INT PRIMARY KEY AUTO_INCREMENT,
     supplier_id VARCHAR(20) NOT NULL,
@@ -114,7 +113,6 @@ CREATE TABLE Formulation (
     
     FOREIGN KEY (supplier_id) REFERENCES Supplier(supplier_id),
     FOREIGN KEY (ingredient_id) REFERENCES Ingredient(ingredient_id)
-    -- We need a TRIGGER to prevent overlapping date ranges for the same (supplier, ingredient) pair
 );
 
 -- Linking table for the supplier's "nested BOM"
@@ -126,10 +124,7 @@ CREATE TABLE FormulationMaterials (
     
     PRIMARY KEY (formulation_id, material_ingredient_id),
     FOREIGN KEY (formulation_id) REFERENCES Formulation(formulation_id),
-    -- This FK points to the 'atomic' child ingredient
     FOREIGN KEY (material_ingredient_id) REFERENCES Ingredient(ingredient_id)
-    -- We need a TRIGGER/CHECK to enforce the "no grandchildren" rule:
-    -- 'material_ingredient_id' MUST be of 'atomic' type.
 );
 
 -- =====================================================================
@@ -138,19 +133,13 @@ CREATE TABLE FormulationMaterials (
 
 -- Physical inventory of raw materials from suppliers
 CREATE TABLE IngredientBatch (
-    -- PK: This is the composite, human-readable ID
     lot_number VARCHAR(255) PRIMARY KEY,
-    
-    -- These are the "parts" used to build the PK
     ingredient_id VARCHAR(20) NOT NULL,
     supplier_id VARCHAR(20) NOT NULL,
-    supplier_batch_id VARCHAR(100) NOT NULL, -- The ID from the supplier's bag
-    
+    supplier_batch_id VARCHAR(100) NOT NULL,
     quantity_on_hand DECIMAL(10, 2) NOT NULL,
     per_unit_cost DECIMAL(10, 2) NOT NULL,
     expiration_date DATE NOT NULL,
-    
-    -- Rule: We must store this to check the "90-day" intake rule
     intake_date DATE NOT NULL,
     
     FOREIGN KEY (ingredient_id) REFERENCES Ingredient(ingredient_id),
@@ -161,24 +150,14 @@ CREATE TABLE IngredientBatch (
 
 -- Physical inventory of finished goods made by the manufacturer
 CREATE TABLE ProductBatch (
-    -- PK: This is the composite, human-readable ID
     lot_number VARCHAR(255) PRIMARY KEY,
-    
-    -- These are the "parts" used to build the PK
     product_id VARCHAR(20) NOT NULL,
     manufacturer_id VARCHAR(20) NOT NULL,
-    manufacturer_batch_id VARCHAR(100) NOT NULL, -- Your internal batch ID
-    
+    manufacturer_batch_id VARCHAR(100) NOT NULL,
     produced_quantity INT NOT NULL,
     expiration_date DATE NOT NULL,
-    
-    -- Rule: We must store this for the "recall time window"
     production_date DATETIME NOT NULL,
-    
-    -- Rule: We store this after calculating it
     total_batch_cost DECIMAL(10, 2),
-    
-    -- Good practice: Store which recipe version was used for this batch
     recipe_id_used INT NOT NULL,
     
     FOREIGN KEY (product_id) REFERENCES Product(product_id),
@@ -187,8 +166,7 @@ CREATE TABLE ProductBatch (
     UNIQUE KEY (product_id, manufacturer_id, manufacturer_batch_id)
 );
 
--- This is the MOST IMPORTANT table for traceability
--- It's the "glue" between IngredientBatches and ProductBatches
+-- Links ingredient batches to product batches
 CREATE TABLE BatchConsumption (
     product_lot_number VARCHAR(255) NOT NULL,
     ingredient_lot_number VARCHAR(255) NOT NULL,

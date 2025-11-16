@@ -305,7 +305,7 @@ BEGIN
     TRUNCATE TABLE Temp_Affected_Lots;
 
     -- =================================================================
-    -- FIX FOR ERROR 1137: Create a SECOND identical temp table
+    -- Create temporary tables to store intermediate results
     -- =================================================================
     CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Flattened_Atomics_2 (
         ingredient_id VARCHAR(20) PRIMARY KEY
