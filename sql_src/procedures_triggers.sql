@@ -307,6 +307,14 @@ BEGIN
     -- This is the "safety bubble". All or nothing.
     START TRANSACTION;
     
+    -- =================================================================
+    -- NEW STEP 3.5: CHECK FOR HEALTH RISKS BEFORE DOING ANYTHING ELSE
+    -- =================================================================
+    CALL Evaluate_Health_Risk(p_consumption_list);
+    -- If the above line throws an error (conflict detected), 
+    -- the EXIT HANDLER will catch it, ROLLBACK, and stop execution.
+    -- If no error, we continue...
+    
     -- == 4. CALCULATE TOTAL COST ==
     -- We use JSON_TABLE to turn the JSON array into a temporary table
     -- which we can JOIN with IngredientBatch to calculate the cost.

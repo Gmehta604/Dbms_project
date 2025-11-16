@@ -91,7 +91,9 @@ INSERT INTO RecipeIngredient (recipe_id, ingredient_id, quantity, unit_of_measur
 -- We'll manually set the PK (formulation_id) to 1.
 -- ---------------------------------------------------------------------
 INSERT INTO Formulation (formulation_id, ingredient_id, supplier_id, valid_from_date, valid_to_date, unit_price, pack_size) VALUES
-(1, '201', '20', '2025-06-01', '2025-11-30', 20.0, '8.0 oz'); -- Made pack_size a string
+(1, '201', '20', '2025-06-01', '2025-11-30', 20.0, '8.0 oz'), -- Made pack_size a string
+-- *** NOTE: ADDED THIS LINE TO ALLOW TEST 3e (HEALTH RISK) TO RUN. ***
+(2, '104', '20', '2025-01-01', NULL, 1.5, '10-kg pack'); -- COMMENT OUT FOR TA DEMO
 
 -- ---------------------------------------------------------------------
 -- 10. `FormulationMaterials`
@@ -100,6 +102,7 @@ INSERT INTO Formulation (formulation_id, ingredient_id, supplier_id, valid_from_
 INSERT INTO FormulationMaterials (formulation_id, material_ingredient_id, quantity) VALUES
 (1, '101', 6.0),
 (1, '102', 2.0);
+-- (Note: Formulation 2 for '104' is atomic, so it has no materials)
 
 -- ---------------------------------------------------------------------
 -- 11. `IngredientBatch`
