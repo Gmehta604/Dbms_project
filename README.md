@@ -6,7 +6,7 @@ This project implements the backend database (**schema**, **triggers**, and **st
 
 ## **👥 Project Team Members**
 
-- JonCarlo Migaly
+- JonCarlo Migaly, Gaurav Mehta, Shrawani Gulhane, Paul Nguyen
 
 ---
 
