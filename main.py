@@ -333,56 +333,23 @@ def run_manufacturer_reports(cursor, db, user_session):
             print("Report 4: Conflicting ingredients for lot '100-MFG001-B0901'")
             
             # =================================================================
-            # FINAL FIX FOR ERROR 1137: "Can't reopen table: 't'"
-            # 1. Create the *first* temporary table
+            # FINAL-V5 FIX FOR ERROR 1137: "Can't reopen table: 't1'"
+            # We break the query into two separate INSERTs.
             # =================================================================
-            cursor.execute("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch (
-                    ingredient_id VARCHAR(20) PRIMARY KEY
-                );
-            """)
+            
+            # 1. Create the *first* temporary table
+            cursor.execute("CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch (ingredient_id VARCHAR(20) PRIMARY KEY);")
             cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch;")
             
-            # =================================================================
-            # Create temporary tables - we need 5 total to avoid "can't reopen" errors
-            # =================================================================
-            cursor.execute("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_2 (
-                    ingredient_id VARCHAR(20) PRIMARY KEY
-                );
-            """)
+            # 2. Create the *second* identical temporary table
+            cursor.execute("CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_2 (ingredient_id VARCHAR(20) PRIMARY KEY);")
             cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_2;")
             
-            cursor.execute("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_3 (
-                    ingredient_id VARCHAR(20) PRIMARY KEY
-                );
-            """)
-            cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_3;")
-            
-            cursor.execute("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_4 (
-                    ingredient_id VARCHAR(20) PRIMARY KEY
-                );
-            """)
-            cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_4;")
-            
-            cursor.execute("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Atoms_In_Batch_5 (
-                    ingredient_id VARCHAR(20) PRIMARY KEY
-                );
-            """)
-            cursor.execute("TRUNCATE TABLE Temp_Atoms_In_Batch_5;")
-            
-            cursor.execute("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Conflict_List (
-                    ingredient_id VARCHAR(20) PRIMARY KEY,
-                    name VARCHAR(255)
-                );
-            """)
+            # 3. Create a *third* temporary table for the results
+            cursor.execute("CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Conflict_List (ingredient_id VARCHAR(20) PRIMARY KEY, name VARCHAR(255));")
             cursor.execute("TRUNCATE TABLE Temp_Conflict_List;")
 
-            # 3. Get all ATOMIC ingredients from the lot
+            # 4. Get all ATOMIC ingredients from the lot
             cursor.execute("""
                 INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
                 SELECT ib.ingredient_id
@@ -393,7 +360,7 @@ def run_manufacturer_reports(cursor, db, user_session):
                   AND i.ingredient_type = 'ATOMIC';
             """)
             
-            # 4. Get all FLATTENED atomic ingredients from COMPOUND lots
+            # 5. Get all FLATTENED atomic ingredients from COMPOUND lots
             cursor.execute("""
                 INSERT IGNORE INTO Temp_Atoms_In_Batch (ingredient_id)
                 SELECT fm.material_ingredient_id
@@ -408,22 +375,16 @@ def run_manufacturer_reports(cursor, db, user_session):
                   AND i.ingredient_type = 'COMPOUND';
             """)
             
-            # =================================================================
-            # Copy data from table 1 into tables 2, 3, 4, and 5
-            # =================================================================
-            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_2 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
-            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_3 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
-            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_4 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
-            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_5 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;")
-            db.commit()
+            # 6. Copy data from table 1 into table 2
+            cursor.execute("INSERT INTO Temp_Atoms_In_Batch_2 (ingredient_id) SELECT ingredient_id FROM Temp_Atoms_In_Batch;");
+            db.commit() # Commit temp table data
 
             # =================================================================
-            # SPLIT THE UNION - Execute as two separate INSERT statements
-            # This completely avoids any table reopen issues
+            # FINAL-V5 FIX: Run the conflict check as two *separate* INSERTs
             # =================================================================
             
-            # First part: Find conflicts where ingredient is dnc.ingredient_a_id
-            query4_part1 = """
+            # 7. (PART A) Find conflicts where our atoms are 'ingredient_b'
+            query4_part_A = """
                 INSERT IGNORE INTO Temp_Conflict_List (ingredient_id, name)
                 SELECT
                     i.ingredient_id,
@@ -433,14 +394,14 @@ def run_manufacturer_reports(cursor, db, user_session):
                 JOIN
                     DoNotCombine dnc ON i.ingredient_id = dnc.ingredient_a_id
                 JOIN
-                    Temp_Atoms_In_Batch_2 AS t1 ON dnc.ingredient_b_id = t1.ingredient_id
+                    Temp_Atoms_In_Batch t1 ON dnc.ingredient_b_id = t1.ingredient_id
                 WHERE
-                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_3);
+                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_2);
             """
-            cursor.execute(query4_part1)
-            
-            # Second part: Find conflicts where ingredient is dnc.ingredient_b_id
-            query4_part2 = """
+            cursor.execute(query4_part_A)
+
+            # 8. (PART B) Find conflicts where our atoms are 'ingredient_a'
+            query4_part_B = """
                 INSERT IGNORE INTO Temp_Conflict_List (ingredient_id, name)
                 SELECT
                     i.ingredient_id,
@@ -450,16 +411,14 @@ def run_manufacturer_reports(cursor, db, user_session):
                 JOIN
                     DoNotCombine dnc ON i.ingredient_id = dnc.ingredient_b_id
                 JOIN
-                    Temp_Atoms_In_Batch_4 AS t_other ON dnc.ingredient_a_id = t_other.ingredient_id
+                    Temp_Atoms_In_Batch t1 ON dnc.ingredient_a_id = t1.ingredient_id
                 WHERE
-                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_5);
+                    i.ingredient_id NOT IN (SELECT ingredient_id FROM Temp_Atoms_In_Batch_2);
             """
-            cursor.execute(query4_part2)
+            cursor.execute(query4_part_B)
             db.commit() # Commit the inserts into the conflict list
 
-            # =================================================================
-            # FINAL FIX: Select from the simple, final results table
-            # =================================================================
+            # 9. Select from the simple, final results table
             cursor.execute("SELECT ingredient_id AS 'Conflicting ID', name AS 'Conflicting Ingredient Name' FROM Temp_Conflict_List;")
             pretty_print_results(cursor)
 
@@ -526,6 +485,79 @@ def manufacturer_menu(cursor, db, user_session):
 # --- SUPPLIER MENU ---
 # =====================================================================
 
+def manage_formulations(cursor, db, user_session):
+    """(SIMPLE FUNCTION) - Creates a new formulation (supplier 'offer')."""
+    print("\n--- (1) Manage Ingredients Supplied (Formulations) ---")
+    try:
+        ingredient_id = input("Enter Ingredient ID you want to supply (e.g., 101): ")
+        pack_size = input("Enter Pack Size (e.g., '10-kg pack'): ")
+        unit_price = float(input("Enter Price per Pack (e.g., 25.50): "))
+        valid_from_date = input("Enter Valid From Date (YYYY-MM-DD): ")
+        valid_to_date = input("Enter Valid To Date (YYYY-MM-DD or leave blank): ")
+        
+        if valid_to_date == "":
+            valid_to_date = None
+
+        query = """
+            INSERT INTO Formulation 
+              (ingredient_id, supplier_id, pack_size, unit_price, valid_from_date, valid_to_date)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(query, (ingredient_id, user_session['id'], pack_size, 
+                               unit_price, valid_from_date, valid_to_date))
+        
+        db.commit()
+        print("\n*** SUCCESS: New formulation created! ***")
+        print("Note: You may now need to define its materials if it's a compound ingredient.")
+
+    except mysql.connector.Error as err:
+        db.rollback()
+        print(f"Error: {err.msg}")
+    except ValueError:
+        db.rollback()
+        print("Error: Invalid input. Price must be a number.")
+
+def define_formulation_materials(cursor, db, user_session):
+    """(SIMPLE FUNCTION) - Defines the 'nested BOM' for a compound formulation."""
+    print("\n--- (2) Define Ingredient Materials (For Compound) ---")
+    try:
+        formulation_id = int(input("Enter Formulation ID to define materials for: "))
+        
+        # Security check: Does this supplier *own* this formulation?
+        cursor.execute("SELECT 1 FROM Formulation WHERE formulation_id = %s AND supplier_id = %s",
+                       (formulation_id, user_session['id']))
+        if not cursor.fetchone():
+            print(f"Error: You do not own Formulation ID {formulation_id}.")
+            return
+            
+        print(f"Defining materials for Formulation ID {formulation_id}...")
+        
+        # Loop and add materials
+        while True:
+            print("\nAdd a material to the formulation (or type 'done' to finish):")
+            ing_id = input("  Material Ingredient ID (must be ATOMIC, e.g., 101): ")
+            if ing_id.lower() == 'done':
+                break
+            
+            qty = float(input("  Quantity (oz) (e.g., 0.5): "))
+
+            query_ing = """
+                INSERT INTO FormulationMaterials (formulation_id, material_ingredient_id, quantity)
+                VALUES (%s, %s, %s)
+            """
+            cursor.execute(query_ing, (formulation_id, ing_id, qty))
+            print(f"Added material {ing_id}.")
+        
+        db.commit()
+        print(f"\nSuccess! Materials for Formulation ID {formulation_id} saved.")
+        
+    except mysql.connector.Error as err:
+        db.rollback()
+        print(f"Error: {err.msg}")
+    except ValueError:
+        db.rollback()
+        print("Error: Quantity must be a number.")
+
 def create_supplier_batch(cursor, db, user_session):
     """(SIMPLE FUNCTION) - Creates a new ingredient batch."""
     print("\n--- (3) Create Ingredient Batch (Lot Intake) ---")
@@ -589,11 +621,9 @@ def supplier_menu(cursor, db, user_session):
         choice = input("Enter choice: ")
 
         if choice == '1':
-            # (UI for INSERT/UPDATE on Formulation table)
-            print("Function not yet implemented. (Simple INSERT into Formulation)")
+            manage_formulations(cursor, db, user_session)
         elif choice == '2':
-            # (UI for INSERT/UPDATE on FormulationMaterials)
-            print("Function not yet implemented. (Simple INSERT into FormulationMaterials)")
+            define_formulation_materials(cursor, db, user_session)
         elif choice == '3':
             create_supplier_batch(cursor, db, user_session)
         elif choice == '4':
