@@ -2,6 +2,8 @@
 -- 1. USER AND ROLE MANAGEMENT
 -- =====================================================================
 
+USE Meal_Manufacturer;
+
 CREATE TABLE Manufacturer (
     manufacturer_id VARCHAR(20) PRIMARY KEY,
     name VARCHAR(255) NOT NULL

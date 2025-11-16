@@ -162,15 +162,12 @@ class DatabaseHelper:
             User dictionary if authenticated, None otherwise
         """
         try:
-            # Use BINARY comparison for exact password matching (case-sensitive)
+            # Match password_hash exactly (in real system, would hash input password first)
             query = """
-                SELECT u.user_id, u.username, u.role, u.name,
-                       m.manufacturer_id, m.manufacturer_name,
-                       s.supplier_id, s.supplier_name
-                FROM Users u
-                LEFT JOIN Manufacturers m ON u.user_id = m.user_id
-                LEFT JOIN Suppliers s ON u.user_id = s.user_id
-                WHERE u.username = %s AND BINARY u.password = %s
+                SELECT u.user_id, u.username, u.role, 
+                       u.manufacturer_id, u.supplier_id
+                FROM AppUser u
+                WHERE u.username = %s AND u.password_hash = %s
             """
             self.cursor.execute(query, (username, password))
             results = self.cursor.fetchall()

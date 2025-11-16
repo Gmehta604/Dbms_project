@@ -50,8 +50,8 @@ def login(db: DatabaseHelper) -> dict:
         print("✗ Password cannot be empty")
         return None
     
-    # Debug: Check if username exists first
-    check_query = "SELECT username FROM Users WHERE username = %s"
+    # Check if username exists first
+    check_query = "SELECT username FROM AppUser WHERE username = %s"
     username_check = db.execute_query(check_query, (username,))
     
     if not username_check:
@@ -60,7 +60,7 @@ def login(db: DatabaseHelper) -> dict:
     
     user = db.authenticate_user(username, password)
     if user:
-        print(f"\n✓ Welcome, {user.get('name', user['username'])}!")
+        print(f"\n✓ Welcome, {user['username']}!")
         print(f"  Role: {user['role']}")
         if user.get('manufacturer_id'):
             print(f"  Manufacturer ID: {user['manufacturer_id']}")

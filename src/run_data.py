@@ -31,29 +31,16 @@ def execute_sql_file(cursor, sql_file):
             sql_script = file.read()
         
         # Split by semicolon to get individual statements
-        # Filter out empty statements and comments
         statements = []
         current_statement = ""
         
         for line in sql_script.split('\n'):
-            stripped = line.strip()
-            
-            # Skip empty lines
-            if not stripped:
-                if current_statement:
-                    current_statement += '\n'
-                continue
-            
-            # Skip comment-only lines
-            if stripped.startswith('--'):
-                continue
-            
             current_statement += line + '\n'
             
             # If line ends with semicolon, it's the end of a statement
-            if stripped.endswith(';'):
+            if line.strip().endswith(';'):
                 stmt = current_statement.strip()
-                if stmt and not stmt.startswith('--'):
+                if stmt:
                     statements.append(stmt)
                 current_statement = ""
         

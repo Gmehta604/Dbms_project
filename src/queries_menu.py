@@ -55,35 +55,14 @@ class QueriesMenu:
         print("=" * 70)
         print()
         
-        query = """
-            SELECT 
-                i.ingredient_id,
-                i.ingredient_name,
-                bc.ingredient_lot_number,
-                bc.quantity_used
-            FROM Product_Batches pb
-            JOIN Products p ON pb.product_id = p.product_id
-            JOIN Manufacturers m ON p.manufacturer_id = m.manufacturer_id
-            JOIN Batch_Consumption bc ON pb.batch_number = bc.product_batch_number
-            JOIN Ingredient_Batches ib ON bc.ingredient_lot_number = ib.lot_number
-            JOIN Ingredients i ON ib.ingredient_id = i.ingredient_id
-            WHERE p.product_id = 100
-              AND m.manufacturer_id = 1
-              AND m.user_id = 'MFG001'
-            ORDER BY pb.production_date DESC, pb.batch_number DESC
-            LIMIT 1
-        """
-        
-        # First get the batch number
+        # First get the last batch for product 100 by MFG001
         batch_query = """
-            SELECT pb.batch_number, pb.production_date
-            FROM Product_Batches pb
-            JOIN Products p ON pb.product_id = p.product_id
-            JOIN Manufacturers m ON p.manufacturer_id = m.manufacturer_id
-            WHERE p.product_id = 100
-              AND m.manufacturer_id = 1
-              AND m.user_id = 'MFG001'
-            ORDER BY pb.production_date DESC, pb.batch_number DESC
+            SELECT pb.lot_number, pb.production_date
+            FROM ProductBatch pb
+            JOIN Product p ON pb.product_id = p.product_id
+            WHERE p.product_id = '100'
+              AND pb.manufacturer_id = 'MFG001'
+            ORDER BY pb.production_date DESC
             LIMIT 1
         """
         
@@ -92,12 +71,25 @@ class QueriesMenu:
             print("No batches found for product 100 (Steak Dinner) by manufacturer MFG001")
             return
         
-        batch_number = batch_result[0]['batch_number']
-        print(f"Last Batch: {batch_number} (Production Date: {batch_result[0]['production_date']})")
+        batch_lot_number = batch_result[0]['lot_number']
+        print(f"Last Batch: {batch_lot_number} (Production Date: {batch_result[0]['production_date']})")
         print()
         
-        # Get ingredients for this batch
-        results = self.db.execute_query(query)
+        # Get ingredients and lot numbers for this batch
+        query = """
+            SELECT 
+                i.ingredient_id,
+                i.name AS ingredient_name,
+                bc.ingredient_lot_number,
+                bc.quantity_consumed
+            FROM BatchConsumption bc
+            JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+            JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
+            WHERE bc.product_lot_number = %s
+            ORDER BY i.ingredient_id
+        """
+        
+        results = self.db.execute_query(query, (batch_lot_number,))
         
         if not results:
             print("No ingredients found for this batch")
@@ -110,7 +102,7 @@ class QueriesMenu:
         
         for r in results:
             print(f"{r['ingredient_id']:<15} {r['ingredient_name']:<30} "
-                  f"{r['ingredient_lot_number']:<25} {r['quantity_used']:<15.2f}")
+                  f"{r['ingredient_lot_number']:<25} {r['quantity_consumed']:<15.2f}")
     
     def query2(self):
         """Query 2: For manufacturer MFG002, list suppliers and total spending"""
@@ -122,16 +114,14 @@ class QueriesMenu:
         query = """
             SELECT 
                 s.supplier_id,
-                s.supplier_name,
-                SUM(bc.quantity_used * ib.cost_per_unit) as total_spent
-            FROM Manufacturers m
-            JOIN Products p ON m.manufacturer_id = p.manufacturer_id
-            JOIN Product_Batches pb ON p.product_id = pb.product_id
-            JOIN Batch_Consumption bc ON pb.batch_number = bc.product_batch_number
-            JOIN Ingredient_Batches ib ON bc.ingredient_lot_number = ib.lot_number
-            JOIN Suppliers s ON ib.supplier_id = s.supplier_id
-            WHERE m.user_id = 'MFG002'
-            GROUP BY s.supplier_id, s.supplier_name
+                s.name AS supplier_name,
+                SUM(bc.quantity_consumed * ib.per_unit_cost) AS total_spent
+            FROM ProductBatch pb
+            JOIN BatchConsumption bc ON pb.lot_number = bc.product_lot_number
+            JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+            JOIN Supplier s ON ib.supplier_id = s.supplier_id
+            WHERE pb.manufacturer_id = 'MFG002'
+            GROUP BY s.supplier_id, s.name
             ORDER BY total_spent DESC
         """
         
@@ -164,14 +154,14 @@ class QueriesMenu:
         
         query = """
             SELECT 
-                pb.batch_number,
-                p.product_name,
-                pb.quantity_produced,
-                pb.total_cost,
-                pb.cost_per_unit
-            FROM Product_Batches pb
-            JOIN Products p ON pb.product_id = p.product_id
-            WHERE pb.batch_number = '100-MFG001-B0901'
+                pb.lot_number,
+                p.name AS product_name,
+                pb.produced_quantity,
+                pb.total_batch_cost,
+                (pb.total_batch_cost / pb.produced_quantity) AS unit_cost
+            FROM ProductBatch pb
+            JOIN Product p ON pb.product_id = p.product_id
+            WHERE pb.lot_number = '100-MFG001-B0901'
         """
         
         results = self.db.execute_query(query)
@@ -181,11 +171,11 @@ class QueriesMenu:
             return
         
         batch = results[0]
-        print(f"Batch Number: {batch['batch_number']}")
+        print(f"Lot Number: {batch['lot_number']}")
         print(f"Product: {batch['product_name']}")
-        print(f"Quantity Produced: {batch['quantity_produced']} units")
-        print(f"Total Cost: ${batch['total_cost']:.2f}")
-        print(f"Unit Cost: ${batch['cost_per_unit']:.2f}")
+        print(f"Quantity Produced: {batch['produced_quantity']} units")
+        print(f"Total Cost: ${batch['total_batch_cost']:.2f}")
+        print(f"Unit Cost: ${batch['unit_cost']:.2f}")
     
     def query4(self):
         """Query 4: Conflicting ingredients for product batch 100-MFG001-B0901"""
@@ -194,15 +184,13 @@ class QueriesMenu:
         print("=" * 70)
         print()
         
-        # First get all ingredients used in this batch (flattened one level)
+        # First get all ingredients used in this batch (from actual consumption)
         ingredients_query = """
-            SELECT DISTINCT COALESCE(ic.child_ingredient_id, ri.ingredient_id) as ingredient_id
-            FROM Product_Batches pb
-            JOIN Recipe_Plans rp ON pb.plan_id = rp.plan_id
-            JOIN Recipe_Ingredients ri ON rp.plan_id = ri.plan_id
-            JOIN Ingredients i ON ri.ingredient_id = i.ingredient_id
-            LEFT JOIN Ingredient_Compositions ic ON i.ingredient_id = ic.parent_ingredient_id
-            WHERE pb.batch_number = '100-MFG001-B0901'
+            SELECT DISTINCT i.ingredient_id
+            FROM BatchConsumption bc
+            JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+            JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
+            WHERE bc.product_lot_number = '100-MFG001-B0901'
         """
         
         ingredient_ids = self.db.execute_query(ingredients_query)
@@ -210,80 +198,71 @@ class QueriesMenu:
             print("Batch not found or has no ingredients")
             return
         
-        ing_ids = [r['ingredient_id'] for r in ingredient_ids]
+        ing_ids = [r['ingredient_id'] for r in ingredient_ids if r['ingredient_id']]
         
         if not ing_ids:
             print("No ingredients found for this batch")
             return
         
-        # Find conflicts
+        # Find conflicts - DoNotCombine uses ingredient_a_id and ingredient_b_id
         placeholders = ','.join(['%s'] * len(ing_ids))
         conflict_query = f"""
             SELECT DISTINCT 
-                dnc.ingredient1_id,
-                dnc.ingredient2_id,
-                i1.ingredient_name as ing1_name,
-                i2.ingredient_name as ing2_name,
-                dnc.reason
-            FROM Do_Not_Combine dnc
-            JOIN Ingredients i1 ON dnc.ingredient1_id = i1.ingredient_id
-            JOIN Ingredients i2 ON dnc.ingredient2_id = i2.ingredient_id
-            WHERE (dnc.ingredient1_id IN ({placeholders}) AND dnc.ingredient2_id IN ({placeholders}))
-               OR (dnc.ingredient1_id IN ({placeholders}) AND dnc.ingredient2_id IN ({placeholders}))
+                dnc.ingredient_a_id,
+                dnc.ingredient_b_id,
+                i1.name AS ing_a_name,
+                i2.name AS ing_b_name
+            FROM DoNotCombine dnc
+            JOIN Ingredient i1 ON dnc.ingredient_a_id = i1.ingredient_id
+            JOIN Ingredient i2 ON dnc.ingredient_b_id = i2.ingredient_id
+            WHERE (dnc.ingredient_a_id IN ({placeholders}) AND dnc.ingredient_b_id IN ({placeholders}))
         """
         
-        params = tuple(ing_ids + ing_ids)
-        conflicts = self.db.execute_query(conflict_query, params)
+        conflicts = self.db.execute_query(conflict_query, tuple(ing_ids + ing_ids))
         
-        # Get all ingredients that conflict with any ingredient in the batch
-        conflicting_ingredient_ids = set()
-        for conflict in conflicts:
-            if conflict['ingredient1_id'] in ing_ids:
-                conflicting_ingredient_ids.add(conflict['ingredient2_id'])
-            if conflict['ingredient2_id'] in ing_ids:
-                conflicting_ingredient_ids.add(conflict['ingredient1_id'])
-        
-        # Remove ingredients already in the batch
-        conflicting_ingredient_ids = conflicting_ingredient_ids - set(ing_ids)
-        
-        if not conflicting_ingredient_ids:
-            print("No conflicting ingredients found (all conflicts are within the batch itself)")
-            if conflicts:
-                print("\nConflicts within the batch:")
-                print("-" * 70)
-                for c in conflicts:
-                    print(f"  ✗ {c['ing1_name']} (ID: {c['ingredient1_id']}) <-> "
-                          f"{c['ing2_name']} (ID: {c['ingredient2_id']})")
-                    print(f"    Reason: {c['reason']}")
+        if not conflicts:
+            print("No conflicting ingredients found in this batch")
             return
         
-        # Get ingredient names
-        conflict_list = list(conflicting_ingredient_ids)
-        conflict_placeholders = ','.join(['%s'] * len(conflict_list))
-        ingredient_names_query = f"""
-            SELECT ingredient_id, ingredient_name
-            FROM Ingredients
-            WHERE ingredient_id IN ({conflict_placeholders})
-            ORDER BY ingredient_id
-        """
-        
-        conflicting_ingredients = self.db.execute_query(ingredient_names_query, tuple(conflict_list))
-        
-        print("Ingredients that CANNOT be included (conflict with current ingredients):")
+        print("Conflicting Ingredients in Batch:")
         print("-" * 70)
-        print(f"{'Ingredient ID':<15} {'Ingredient Name':<30}")
+        print(f"{'Ingredient A':<35} {'Ingredient B':<35}")
         print("-" * 70)
         
-        for ing in conflicting_ingredients:
-            print(f"{ing['ingredient_id']:<15} {ing['ingredient_name']:<30}")
+        for c in conflicts:
+            ing_a_str = f"{c['ing_a_name']} (ID: {c['ingredient_a_id']})"
+            ing_b_str = f"{c['ing_b_name']} (ID: {c['ingredient_b_id']})"
+            print(f"{ing_a_str:<35} {ing_b_str:<35}")
         
-        if conflicts:
-            print("\nDetected Conflicts:")
+        # Also find ingredients that would conflict if added
+        conflicting_outside = set()
+        for conflict in conflicts:
+            if conflict['ingredient_a_id'] in ing_ids:
+                if conflict['ingredient_b_id'] not in ing_ids:
+                    conflicting_outside.add(conflict['ingredient_b_id'])
+            if conflict['ingredient_b_id'] in ing_ids:
+                if conflict['ingredient_a_id'] not in ing_ids:
+                    conflicting_outside.add(conflict['ingredient_a_id'])
+        
+        if conflicting_outside:
+            conflict_list = list(conflicting_outside)
+            conflict_placeholders = ','.join(['%s'] * len(conflict_list))
+            ingredient_names_query = f"""
+                SELECT ingredient_id, name AS ingredient_name
+                FROM Ingredient
+                WHERE ingredient_id IN ({conflict_placeholders})
+                ORDER BY ingredient_id
+            """
+            
+            conflicting_ingredients = self.db.execute_query(ingredient_names_query, tuple(conflict_list))
+            
+            print("\nIngredients that CANNOT be added (would conflict with current ingredients):")
             print("-" * 70)
-            for c in conflicts:
-                print(f"  {c['ing1_name']} (ID: {c['ingredient1_id']}) <-> "
-                      f"{c['ing2_name']} (ID: {c['ingredient2_id']})")
-                print(f"    Reason: {c['reason']}")
+            print(f"{'Ingredient ID':<15} {'Ingredient Name':<30}")
+            print("-" * 70)
+            
+            for ing in conflicting_ingredients:
+                print(f"{ing['ingredient_id']:<15} {ing['ingredient_name']:<30}")
     
     def query5(self):
         """Query 5: Manufacturers NOT supplied by James Miller (21)"""
@@ -293,15 +272,14 @@ class QueriesMenu:
         print()
         
         query = """
-            SELECT DISTINCT m.manufacturer_id, m.manufacturer_name, m.user_id
-            FROM Manufacturers m
+            SELECT DISTINCT m.manufacturer_id, m.name AS manufacturer_name
+            FROM Manufacturer m
             WHERE m.manufacturer_id NOT IN (
-                SELECT DISTINCT p.manufacturer_id
-                FROM Products p
-                JOIN Product_Batches pb ON p.product_id = pb.product_id
-                JOIN Batch_Consumption bc ON pb.batch_number = bc.product_batch_number
-                JOIN Ingredient_Batches ib ON bc.ingredient_lot_number = ib.lot_number
-                WHERE ib.supplier_id = 21
+                SELECT DISTINCT pb.manufacturer_id
+                FROM ProductBatch pb
+                JOIN BatchConsumption bc ON pb.lot_number = bc.product_lot_number
+                JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+                WHERE ib.supplier_id = '21'
             )
             ORDER BY m.manufacturer_id
         """
@@ -314,10 +292,11 @@ class QueriesMenu:
         
         print("Manufacturers NOT supplied by James Miller (21):")
         print("-" * 70)
-        print(f"{'Manufacturer ID':<18} {'User ID':<15} {'Manufacturer Name':<30}")
+        print(f"{'Manufacturer ID':<18} {'Manufacturer Name':<50}")
         print("-" * 70)
         
         for r in results:
-            print(f"{r['manufacturer_id']:<18} {r['user_id']:<15} {r['manufacturer_name']:<30}")
+            print(f"{r['manufacturer_id']:<18} {r['manufacturer_name']:<50}")
+
 
 

@@ -63,10 +63,10 @@ class ManufacturerMenu:
         
         # List existing products for this manufacturer
         query = """
-            SELECT p.product_id, p.product_number, p.product_name, 
-                   c.category_name, p.standard_batch_size
-            FROM Products p
-            JOIN Categories c ON p.category_id = c.category_id
+            SELECT p.product_id, p.name, 
+                   c.name AS category_name, p.standard_batch_size
+            FROM Product p
+            JOIN Category c ON p.category_id = c.category_id
             WHERE p.manufacturer_id = %s
             ORDER BY p.product_id
         """
@@ -75,7 +75,7 @@ class ManufacturerMenu:
         if products:
             print("Existing Products:")
             for p in products:
-                print(f"  [{p['product_id']}] {p['product_name']} ({p['category_name']}) - Batch Size: {p['standard_batch_size']}")
+                print(f"  [{p['product_id']}] {p['name']} ({p['category_name']}) - Batch Size: {p['standard_batch_size']}")
             print()
         
         action = input("Create new product? (y/n): ").strip().lower()
@@ -83,33 +83,30 @@ class ManufacturerMenu:
             return
         
         # Get product details
-        product_id = input("Product ID (integer): ").strip()
-        if not product_id.isdigit():
-            print("✗ Product ID must be an integer")
+        product_id = input("Product ID (VARCHAR): ").strip()
+        if not product_id:
+            print("✗ Product ID is required")
             return
-        product_id = int(product_id)
         
-        product_number = input("Product Number (optional): ").strip() or None
         product_name = input("Product Name: ").strip()
         if not product_name:
             print("✗ Product name is required")
             return
         
         # List categories
-        categories = self.db.execute_query("SELECT category_id, category_name FROM Categories ORDER BY category_id")
+        categories = self.db.execute_query("SELECT category_id, name FROM Category ORDER BY category_id")
         if not categories:
             print("✗ No categories available. Please create categories first.")
             return
         
         print("\nAvailable Categories:")
         for cat in categories:
-            print(f"  [{cat['category_id']}] {cat['category_name']}")
+            print(f"  [{cat['category_id']}] {cat['name']}")
         
         category_id = input("\nCategory ID: ").strip()
-        if not category_id.isdigit() or int(category_id) not in [c['category_id'] for c in categories]:
+        if category_id not in [str(c['category_id']) for c in categories]:
             print("✗ Invalid category ID")
             return
-        category_id = int(category_id)
         
         batch_size = input("Standard Batch Size: ").strip()
         if not batch_size.isdigit() or int(batch_size) <= 0:
@@ -119,28 +116,26 @@ class ManufacturerMenu:
         
         # Check if product exists
         existing = self.db.execute_query(
-            "SELECT product_id FROM Products WHERE product_id = %s",
+            "SELECT product_id FROM Product WHERE product_id = %s",
             (product_id,)
         )
         
         if existing:
             # Update
             query = """
-                UPDATE Products 
-                SET product_number = %s, product_name = %s, 
-                    category_id = %s, standard_batch_size = %s
+                UPDATE Product 
+                SET name = %s, category_id = %s, standard_batch_size = %s
                 WHERE product_id = %s AND manufacturer_id = %s
             """
-            if self.db.execute_update(query, (product_number, product_name, category_id, batch_size, product_id, self.manufacturer_id)):
+            if self.db.execute_update(query, (product_name, category_id, batch_size, product_id, self.manufacturer_id)):
                 print(f"✓ Product {product_id} updated successfully")
         else:
             # Insert
             query = """
-                INSERT INTO Products (product_id, product_number, manufacturer_id, 
-                                    category_id, product_name, standard_batch_size, created_date)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO Product (product_id, name, category_id, manufacturer_id, standard_batch_size)
+                VALUES (%s, %s, %s, %s, %s)
             """
-            if self.db.execute_update(query, (product_id, product_number, self.manufacturer_id, category_id, product_name, batch_size, datetime.now().date())):
+            if self.db.execute_update(query, (product_id, product_name, category_id, self.manufacturer_id, batch_size)):
                 print(f"✓ Product {product_id} created successfully")
     
     def define_update_recipe_plan(self):
@@ -152,8 +147,8 @@ class ManufacturerMenu:
         
         # List products for this manufacturer
         query = """
-            SELECT product_id, product_name 
-            FROM Products 
+            SELECT product_id, name 
+            FROM Product 
             WHERE manufacturer_id = %s
             ORDER BY product_id
         """
@@ -165,31 +160,25 @@ class ManufacturerMenu:
         
         print("Your Products:")
         for p in products:
-            print(f"  [{p['product_id']}] {p['product_name']}")
+            print(f"  [{p['product_id']}] {p['name']}")
         
         product_id = input("\nProduct ID: ").strip()
-        if not product_id.isdigit() or int(product_id) not in [p['product_id'] for p in products]:
+        if product_id not in [str(p['product_id']) for p in products]:
             print("✗ Invalid product ID")
             return
-        product_id = int(product_id)
         
-        # Get next plan ID and version
-        next_plan_id = self.db.get_next_id('Recipe_Plans', 'plan_id')
+        # Get next recipe ID
+        next_recipe_id = self.db.get_next_id('Recipe', 'recipe_id')
         
-        # Get latest version for this product
-        version_query = """
-            SELECT MAX(version_number) as max_version 
-            FROM Recipe_Plans 
-            WHERE product_id = %s
-        """
-        version_result = self.db.execute_query(version_query, (product_id,))
-        next_version = (version_result[0]['max_version'] or 0) + 1
-        
-        print(f"\nCreating new recipe plan version {next_version} (Plan ID: {next_plan_id})")
+        # Get recipe name
+        recipe_name = input("Recipe Name (e.g., v1-standard): ").strip()
+        if not recipe_name:
+            print("✗ Recipe name is required")
+            return
         
         # List available ingredients
         ingredients = self.db.execute_query(
-            "SELECT ingredient_id, ingredient_name, ingredient_type FROM Ingredients ORDER BY ingredient_id"
+            "SELECT ingredient_id, name, ingredient_type FROM Ingredient ORDER BY ingredient_id"
         )
         
         if not ingredients:
@@ -198,25 +187,26 @@ class ManufacturerMenu:
         
         print("\nAvailable Ingredients:")
         for ing in ingredients:
-            print(f"  [{ing['ingredient_id']}] {ing['ingredient_name']} ({ing['ingredient_type']})")
+            print(f"  [{ing['ingredient_id']}] {ing['name']} ({ing['ingredient_type']})")
         
-        # Create recipe plan
-        plan_query = """
-            INSERT INTO Recipe_Plans (plan_id, product_id, version_number, created_date, is_active)
+        # Create recipe
+        recipe_query = """
+            INSERT INTO Recipe (recipe_id, product_id, name, creation_date, is_active)
             VALUES (%s, %s, %s, %s, TRUE)
         """
-        if not self.db.execute_update(plan_query, (next_plan_id, product_id, next_version, datetime.now().date())):
+        if not self.db.execute_update(recipe_query, (next_recipe_id, product_id, recipe_name, datetime.now().date())):
             return
         
         print("\nEnter recipe ingredients (press Enter with empty ingredient ID to finish):")
         recipe_ingredients = []
+        unit_of_measure = 'oz'  # Default unit
         
         while True:
             ing_id = input("Ingredient ID: ").strip()
             if not ing_id:
                 break
             
-            if not ing_id.isdigit() or int(ing_id) not in [i['ingredient_id'] for i in ingredients]:
+            if ing_id not in [str(i['ingredient_id']) for i in ingredients]:
                 print("✗ Invalid ingredient ID")
                 continue
             
@@ -230,48 +220,48 @@ class ManufacturerMenu:
                 print("✗ Invalid quantity")
                 continue
             
-            recipe_ingredients.append((next_plan_id, int(ing_id), qty))
-            print(f"✓ Added ingredient {ing_id}: {qty} oz")
+            recipe_ingredients.append((next_recipe_id, ing_id, qty, unit_of_measure))
+            print(f"✓ Added ingredient {ing_id}: {qty} {unit_of_measure}")
         
         if not recipe_ingredients:
-            print("✗ Recipe plan must have at least one ingredient")
-            # Delete the plan
-            self.db.execute_update("DELETE FROM Recipe_Plans WHERE plan_id = %s", (next_plan_id,))
+            print("✗ Recipe must have at least one ingredient")
+            # Delete the recipe
+            self.db.execute_update("DELETE FROM Recipe WHERE recipe_id = %s", (next_recipe_id,))
             return
         
         # Insert recipe ingredients
         insert_query = """
-            INSERT INTO Recipe_Ingredients (plan_id, ingredient_id, quantity_required)
-            VALUES (%s, %s, %s)
+            INSERT INTO RecipeIngredient (recipe_id, ingredient_id, quantity, unit_of_measure)
+            VALUES (%s, %s, %s, %s)
         """
         if self.db.execute_many(insert_query, recipe_ingredients):
-            print(f"\n✓ Recipe plan {next_plan_id} (version {next_version}) created successfully")
+            print(f"\n✓ Recipe {next_recipe_id} ({recipe_name}) created successfully")
             
             # Check for incompatibilities
-            self.check_recipe_incompatibilities(next_plan_id)
+            self.check_recipe_incompatibilities(next_recipe_id)
     
-    def check_recipe_incompatibilities(self, plan_id: int):
-        """Check for do-not-combine conflicts in recipe plan"""
+    def check_recipe_incompatibilities(self, recipe_id: int):
+        """Check for do-not-combine conflicts in recipe"""
         query = """
-            SELECT DISTINCT dnc.ingredient1_id, dnc.ingredient2_id,
-                   i1.ingredient_name as ing1_name, i2.ingredient_name as ing2_name
-            FROM Recipe_Ingredients ri1
-            JOIN Recipe_Ingredients ri2 ON ri1.plan_id = ri2.plan_id
-            JOIN Do_Not_Combine dnc ON (
-                (ri1.ingredient_id = dnc.ingredient1_id AND ri2.ingredient_id = dnc.ingredient2_id)
-                OR (ri1.ingredient_id = dnc.ingredient2_id AND ri2.ingredient_id = dnc.ingredient1_id)
+            SELECT DISTINCT dnc.ingredient_a_id, dnc.ingredient_b_id,
+                   i1.name AS ing_a_name, i2.name AS ing_b_name
+            FROM RecipeIngredient ri1
+            JOIN RecipeIngredient ri2 ON ri1.recipe_id = ri2.recipe_id
+            JOIN DoNotCombine dnc ON (
+                (ri1.ingredient_id = dnc.ingredient_a_id AND ri2.ingredient_id = dnc.ingredient_b_id)
+                OR (ri1.ingredient_id = dnc.ingredient_b_id AND ri2.ingredient_id = dnc.ingredient_a_id)
             )
-            JOIN Ingredients i1 ON dnc.ingredient1_id = i1.ingredient_id
-            JOIN Ingredients i2 ON dnc.ingredient2_id = i2.ingredient_id
-            WHERE ri1.plan_id = %s AND ri1.ingredient_id != ri2.ingredient_id
+            JOIN Ingredient i1 ON dnc.ingredient_a_id = i1.ingredient_id
+            JOIN Ingredient i2 ON dnc.ingredient_b_id = i2.ingredient_id
+            WHERE ri1.recipe_id = %s AND ri1.ingredient_id != ri2.ingredient_id
         """
-        conflicts = self.db.execute_query(query, (plan_id,))
+        conflicts = self.db.execute_query(query, (recipe_id,))
         
         if conflicts:
             print("\n⚠ WARNING: Incompatible ingredient pairs detected:")
             for conflict in conflicts:
-                print(f"  - {conflict['ing1_name']} (ID: {conflict['ingredient1_id']}) "
-                      f"cannot be combined with {conflict['ing2_name']} (ID: {conflict['ingredient2_id']})")
+                print(f"  - {conflict['ing_a_name']} (ID: {conflict['ingredient_a_id']}) "
+                      f"cannot be combined with {conflict['ing_b_name']} (ID: {conflict['ingredient_b_id']})")
         else:
             print("\n✓ No incompatibility conflicts detected")
     
@@ -286,7 +276,7 @@ class ManufacturerMenu:
         
         # List available ingredients
         ingredients = self.db.execute_query(
-            "SELECT ingredient_id, ingredient_name FROM Ingredients ORDER BY ingredient_id"
+            "SELECT ingredient_id, name FROM Ingredient ORDER BY ingredient_id"
         )
         if not ingredients:
             print("✗ No ingredients available")
@@ -294,25 +284,30 @@ class ManufacturerMenu:
         
         print("Available Ingredients:")
         for ing in ingredients:
-            print(f"  [{ing['ingredient_id']}] {ing['ingredient_name']}")
+            print(f"  [{ing['ingredient_id']}] {ing['name']}")
         
         ingredient_id = input("\nIngredient ID: ").strip()
-        if not ingredient_id.isdigit() or int(ingredient_id) not in [i['ingredient_id'] for i in ingredients]:
+        if ingredient_id not in [str(i['ingredient_id']) for i in ingredients]:
             print("✗ Invalid ingredient ID")
             return
-        ingredient_id = int(ingredient_id)
         
         # List suppliers for this ingredient
         suppliers_query = """
-            SELECT s.supplier_id, s.supplier_name
-            FROM Suppliers s
-            JOIN Supplier_Ingredients si ON s.supplier_id = si.supplier_id
-            WHERE si.ingredient_id = %s AND si.is_active = TRUE
+            SELECT DISTINCT s.supplier_id, s.name AS supplier_name
+            FROM Supplier s
+            JOIN IngredientBatch ib ON s.supplier_id = ib.supplier_id
+            WHERE ib.ingredient_id = %s
         """
         suppliers = self.db.execute_query(suppliers_query, (ingredient_id,))
         
+        # If no existing batches, list all suppliers
         if not suppliers:
-            print("✗ No active suppliers found for this ingredient")
+            suppliers = self.db.execute_query(
+                "SELECT supplier_id, name AS supplier_name FROM Supplier ORDER BY supplier_id"
+            )
+        
+        if not suppliers:
+            print("✗ No suppliers found")
             return
         
         print("\nAvailable Suppliers:")
@@ -320,10 +315,9 @@ class ManufacturerMenu:
             print(f"  [{sup['supplier_id']}] {sup['supplier_name']}")
         
         supplier_id = input("\nSupplier ID: ").strip()
-        if not supplier_id.isdigit() or int(supplier_id) not in [s['supplier_id'] for s in suppliers]:
+        if supplier_id not in [str(s['supplier_id']) for s in suppliers]:
             print("✗ Invalid supplier ID")
             return
-        supplier_id = int(supplier_id)
         
         # Get batch details
         quantity = input("Quantity (oz): ").strip()
@@ -336,22 +330,22 @@ class ManufacturerMenu:
             print("✗ Invalid quantity")
             return
         
-        cost_per_unit = input("Cost per unit: ").strip()
+        per_unit_cost = input("Cost per unit: ").strip()
         try:
-            cost_per_unit = float(cost_per_unit)
-            if cost_per_unit < 0:
+            per_unit_cost = float(per_unit_cost)
+            if per_unit_cost < 0:
                 print("✗ Cost cannot be negative")
                 return
         except ValueError:
             print("✗ Invalid cost")
             return
         
-        received_date_str = input("Received Date (YYYY-MM-DD) [today]: ").strip()
-        if not received_date_str:
-            received_date = datetime.now().date()
+        intake_date_str = input("Intake Date (YYYY-MM-DD) [today]: ").strip()
+        if not intake_date_str:
+            intake_date = datetime.now().date()
         else:
             try:
-                received_date = datetime.strptime(received_date_str, '%Y-%m-%d').date()
+                intake_date = datetime.strptime(intake_date_str, '%Y-%m-%d').date()
             except ValueError:
                 print("✗ Invalid date format")
                 return
@@ -364,40 +358,44 @@ class ManufacturerMenu:
             return
         
         # Check 90-day rule
-        min_expiration = received_date + timedelta(days=90)
+        min_expiration = intake_date + timedelta(days=90)
         if expiration_date < min_expiration:
-            print(f"✗ Expiration date must be at least 90 days from receipt date")
+            print(f"✗ Expiration date must be at least 90 days from intake date")
             print(f"  Minimum expiration: {min_expiration}")
             return
         
-        # Generate lot number
-        batch_id = input("Batch ID (for lot number): ").strip()
-        if not batch_id:
-            print("✗ Batch ID is required")
+        # Get supplier batch ID
+        supplier_batch_id = input("Supplier Batch ID (for lot number): ").strip()
+        if not supplier_batch_id:
+            print("✗ Supplier Batch ID is required")
             return
         
-        lot_number = f"{ingredient_id}-{supplier_id}-{batch_id}"
-        
-        # Check if lot number already exists
+        # Check if combination already exists (trigger will create lot_number)
         existing = self.db.execute_query(
-            "SELECT lot_number FROM Ingredient_Batches WHERE lot_number = %s",
-            (lot_number,)
+            "SELECT lot_number FROM IngredientBatch WHERE ingredient_id = %s AND supplier_id = %s AND supplier_batch_id = %s",
+            (ingredient_id, supplier_id, supplier_batch_id)
         )
         if existing:
-            print(f"✗ Lot number {lot_number} already exists")
+            print(f"✗ Batch with ingredient_id={ingredient_id}, supplier_id={supplier_id}, supplier_batch_id={supplier_batch_id} already exists")
             return
         
-        # Insert ingredient batch
+        # Insert ingredient batch (trigger will generate lot_number)
         query = """
-            INSERT INTO Ingredient_Batches 
-            (lot_number, ingredient_id, supplier_id, version_id, quantity_on_hand, 
-             cost_per_unit, expiration_date, received_date)
-            VALUES (%s, %s, %s, NULL, %s, %s, %s, %s)
+            INSERT INTO IngredientBatch 
+            (ingredient_id, supplier_id, supplier_batch_id, quantity_on_hand, 
+             per_unit_cost, expiration_date, intake_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-        if self.db.execute_update(query, (lot_number, ingredient_id, supplier_id, quantity, cost_per_unit, expiration_date, received_date)):
+        if self.db.execute_update(query, (ingredient_id, supplier_id, supplier_batch_id, quantity, per_unit_cost, expiration_date, intake_date)):
+            # Get the generated lot number
+            lot_result = self.db.execute_query(
+                "SELECT lot_number FROM IngredientBatch WHERE ingredient_id = %s AND supplier_id = %s AND supplier_batch_id = %s",
+                (ingredient_id, supplier_id, supplier_batch_id)
+            )
+            lot_number = lot_result[0]['lot_number'] if lot_result else "N/A"
             print(f"✓ Ingredient batch {lot_number} recorded successfully")
             print(f"  Quantity: {quantity} oz")
-            print(f"  Cost per unit: ${cost_per_unit:.2f}")
+            print(f"  Cost per unit: ${per_unit_cost:.2f}")
     
     def create_product_batch(self):
         """Create a product batch with lot consumption"""
@@ -408,7 +406,7 @@ class ManufacturerMenu:
         
         # List products
         products = self.db.execute_query(
-            "SELECT product_id, product_name, standard_batch_size FROM Products WHERE manufacturer_id = %s",
+            "SELECT product_id, name, standard_batch_size FROM Product WHERE manufacturer_id = %s",
             (self.manufacturer_id,)
         )
         
@@ -418,40 +416,39 @@ class ManufacturerMenu:
         
         print("Your Products:")
         for p in products:
-            print(f"  [{p['product_id']}] {p['product_name']} (Batch Size: {p['standard_batch_size']})")
+            print(f"  [{p['product_id']}] {p['name']} (Batch Size: {p['standard_batch_size']})")
         
         product_id = input("\nProduct ID: ").strip()
-        if not product_id.isdigit() or int(product_id) not in [p['product_id'] for p in products]:
+        if product_id not in [str(p['product_id']) for p in products]:
             print("✗ Invalid product ID")
             return
-        product_id = int(product_id)
         
-        product = next(p for p in products if p['product_id'] == product_id)
+        product = next(p for p in products if str(p['product_id']) == product_id)
         batch_size = product['standard_batch_size']
         
-        # List active recipe plans for this product
-        plans = self.db.execute_query(
+        # List active recipes for this product
+        recipes = self.db.execute_query(
             """
-            SELECT plan_id, version_number, created_date
-            FROM Recipe_Plans
+            SELECT recipe_id, name, creation_date
+            FROM Recipe
             WHERE product_id = %s AND is_active = TRUE
-            ORDER BY version_number DESC
+            ORDER BY creation_date DESC
             """
         , (product_id,))
         
-        if not plans:
-            print("✗ No active recipe plans found for this product")
+        if not recipes:
+            print("✗ No active recipes found for this product")
             return
         
-        print("\nActive Recipe Plans:")
-        for plan in plans:
-            print(f"  [{plan['plan_id']}] Version {plan['version_number']} (Created: {plan['created_date']})")
+        print("\nActive Recipes:")
+        for recipe in recipes:
+            print(f"  [{recipe['recipe_id']}] {recipe['name']} (Created: {recipe['creation_date']})")
         
-        plan_id = input("\nRecipe Plan ID: ").strip()
-        if not plan_id.isdigit() or int(plan_id) not in [p['plan_id'] for p in plans]:
-            print("✗ Invalid plan ID")
+        recipe_id = input("\nRecipe ID: ").strip()
+        if not recipe_id.isdigit() or int(recipe_id) not in [r['recipe_id'] for r in recipes]:
+            print("✗ Invalid recipe ID")
             return
-        plan_id = int(plan_id)
+        recipe_id = int(recipe_id)
         
         # Get quantity produced
         quantity_str = input(f"Quantity Produced (must be multiple of {batch_size}): ").strip()
@@ -470,25 +467,25 @@ class ManufacturerMenu:
         # Get recipe ingredients
         recipe_ingredients = self.db.execute_query(
             """
-            SELECT ri.ingredient_id, ri.quantity_required, i.ingredient_name
-            FROM Recipe_Ingredients ri
-            JOIN Ingredients i ON ri.ingredient_id = i.ingredient_id
-            WHERE ri.plan_id = %s
+            SELECT ri.ingredient_id, ri.quantity, i.name AS ingredient_name
+            FROM RecipeIngredient ri
+            JOIN Ingredient i ON ri.ingredient_id = i.ingredient_id
+            WHERE ri.recipe_id = %s
             """
-        , (plan_id,))
+        , (recipe_id,))
         
         if not recipe_ingredients:
-            print("✗ Recipe plan has no ingredients")
+            print("✗ Recipe has no ingredients")
             return
         
         print("\nRecipe Ingredients (per unit):")
         for ri in recipe_ingredients:
-            print(f"  {ri['ingredient_name']} (ID: {ri['ingredient_id']}): {ri['quantity_required']} oz")
+            print(f"  {ri['ingredient_name']} (ID: {ri['ingredient_id']}): {ri['quantity']} oz")
         
         # Calculate total quantities needed
         total_quantities = {}
         for ri in recipe_ingredients:
-            total_quantities[ri['ingredient_id']] = ri['quantity_required'] * quantity
+            total_quantities[ri['ingredient_id']] = ri['quantity'] * quantity
         
         print(f"\nTotal Quantities Needed (for {quantity} units):")
         for ing_id, qty in total_quantities.items():
@@ -509,8 +506,8 @@ class ManufacturerMenu:
             # Get available lots
             available_lots = self.db.execute_query(
                 """
-                SELECT lot_number, quantity_on_hand, expiration_date, cost_per_unit
-                FROM Ingredient_Batches
+                SELECT lot_number, quantity_on_hand, expiration_date, per_unit_cost
+                FROM IngredientBatch
                 WHERE ingredient_id = %s 
                   AND quantity_on_hand > 0
                   AND expiration_date > CURDATE()
@@ -525,7 +522,7 @@ class ManufacturerMenu:
             print("  Available Lots:")
             for lot in available_lots:
                 print(f"    [{lot['lot_number']}] {lot['quantity_on_hand']} oz available, "
-                      f"expires: {lot['expiration_date']}, cost: ${lot['cost_per_unit']:.2f}/oz")
+                      f"expires: {lot['expiration_date']}, cost: ${lot['per_unit_cost']:.2f}/oz")
             
             remaining = needed
             selected_lots = []
@@ -565,21 +562,19 @@ class ManufacturerMenu:
             
             lot_selections[ing_id] = selected_lots
         
-        # Generate product batch number
-        batch_id = input("\nBatch ID (for batch number): ").strip()
-        if not batch_id:
-            print("✗ Batch ID is required")
+        # Get manufacturer batch ID
+        manufacturer_batch_id = input("\nManufacturer Batch ID (for lot number): ").strip()
+        if not manufacturer_batch_id:
+            print("✗ Manufacturer Batch ID is required")
             return
         
-        batch_number = f"{product_id}-{self.manufacturer_id}-{batch_id}"
-        
-        # Check if batch number exists
+        # Check if combination already exists (trigger will create lot_number)
         existing = self.db.execute_query(
-            "SELECT batch_number FROM Product_Batches WHERE batch_number = %s",
-            (batch_number,)
+            "SELECT lot_number FROM ProductBatch WHERE product_id = %s AND manufacturer_id = %s AND manufacturer_batch_id = %s",
+            (product_id, self.manufacturer_id, manufacturer_batch_id)
         )
         if existing:
-            print(f"✗ Batch number {batch_number} already exists")
+            print(f"✗ Batch with product_id={product_id}, manufacturer_id={self.manufacturer_id}, manufacturer_batch_id={manufacturer_batch_id} already exists")
             return
         
         # Calculate total cost
@@ -587,21 +582,26 @@ class ManufacturerMenu:
         for ing_id, lots in lot_selections.items():
             for lot_number, qty_used in lots:
                 lot_info = self.db.execute_query(
-                    "SELECT cost_per_unit FROM Ingredient_Batches WHERE lot_number = %s",
+                    "SELECT per_unit_cost FROM IngredientBatch WHERE lot_number = %s",
                     (lot_number,)
                 )
                 if lot_info:
-                    total_cost += lot_info[0]['cost_per_unit'] * qty_used
+                    total_cost += lot_info[0]['per_unit_cost'] * qty_used
         
-        cost_per_unit = total_cost / quantity if quantity > 0 else 0
+        total_batch_cost = total_cost
         
         # Get production date
-        prod_date_str = input("Production Date (YYYY-MM-DD) [today]: ").strip()
+        prod_date_str = input("Production Date (YYYY-MM-DD HH:MM:SS) [today]: ").strip()
         if not prod_date_str:
-            prod_date = datetime.now().date()
+            prod_date = datetime.now()
         else:
             try:
-                prod_date = datetime.strptime(prod_date_str, '%Y-%m-%d').date()
+                # Try with time first
+                try:
+                    prod_date = datetime.strptime(prod_date_str, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    # Fall back to date only
+                    prod_date = datetime.strptime(prod_date_str, '%Y-%m-%d')
             except ValueError:
                 print("✗ Invalid date format")
                 return
@@ -613,44 +613,54 @@ class ManufacturerMenu:
             print("✗ Invalid date format")
             return
         
-        # Use stored procedure to create batch (if exists) or do it manually
-        # For now, do it manually with transaction
+        # Use transaction to create batch
         try:
-            # Insert product batch
+            # Insert product batch (trigger will generate lot_number)
             batch_query = """
-                INSERT INTO Product_Batches 
-                (batch_number, product_id, plan_id, quantity_produced, total_cost, 
-                 cost_per_unit, production_date, expiration_date)
+                INSERT INTO ProductBatch 
+                (product_id, manufacturer_id, manufacturer_batch_id, produced_quantity, 
+                 production_date, expiration_date, recipe_id_used, total_batch_cost)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """
             if not self.db.execute_update(batch_query, 
-                (batch_number, product_id, plan_id, quantity, total_cost, cost_per_unit, prod_date, exp_date)):
+                (product_id, self.manufacturer_id, manufacturer_batch_id, quantity, prod_date, exp_date, recipe_id, total_batch_cost)):
                 return
+            
+            # Get the generated lot number
+            lot_result = self.db.execute_query(
+                "SELECT lot_number FROM ProductBatch WHERE product_id = %s AND manufacturer_id = %s AND manufacturer_batch_id = %s",
+                (product_id, self.manufacturer_id, manufacturer_batch_id)
+            )
+            if not lot_result:
+                print("✗ Error: Could not retrieve generated lot number")
+                return
+            product_lot_number = lot_result[0]['lot_number']
             
             # Insert batch consumption records and update lot quantities
             for ing_id, lots in lot_selections.items():
-                for lot_number, qty_used in lots:
+                for lot_number, qty_consumed in lots:
                     # Insert consumption record
                     cons_query = """
-                        INSERT INTO Batch_Consumption (product_batch_number, ingredient_lot_number, quantity_used)
+                        INSERT INTO BatchConsumption (product_lot_number, ingredient_lot_number, quantity_consumed)
                         VALUES (%s, %s, %s)
                     """
-                    if not self.db.execute_update(cons_query, (batch_number, lot_number, qty_used)):
+                    if not self.db.execute_update(cons_query, (product_lot_number, lot_number, qty_consumed)):
                         return
                     
                     # Update lot quantity
                     update_query = """
-                        UPDATE Ingredient_Batches 
+                        UPDATE IngredientBatch 
                         SET quantity_on_hand = quantity_on_hand - %s
                         WHERE lot_number = %s
                     """
-                    if not self.db.execute_update(update_query, (qty_used, lot_number)):
+                    if not self.db.execute_update(update_query, (qty_consumed, lot_number)):
                         return
             
-            print(f"\n✓ Product batch {batch_number} created successfully")
+            unit_cost = total_batch_cost / quantity if quantity > 0 else 0
+            print(f"\n✓ Product batch {product_lot_number} created successfully")
             print(f"  Quantity: {quantity} units")
-            print(f"  Total Cost: ${total_cost:.2f}")
-            print(f"  Cost per Unit: ${cost_per_unit:.2f}")
+            print(f"  Total Cost: ${total_batch_cost:.2f}")
+            print(f"  Cost per Unit: ${unit_cost:.2f}")
             
         except Exception as e:
             print(f"✗ Error creating batch: {e}")
@@ -689,12 +699,12 @@ class ManufacturerMenu:
     def report_on_hand(self):
         """Report on-hand inventory by item/lot"""
         query = """
-            SELECT ib.lot_number, i.ingredient_name, ib.quantity_on_hand, 
-                   ib.expiration_date, ib.cost_per_unit
-            FROM Ingredient_Batches ib
-            JOIN Ingredients i ON ib.ingredient_id = i.ingredient_id
+            SELECT ib.lot_number, i.name AS ingredient_name, ib.quantity_on_hand, 
+                   ib.expiration_date, ib.per_unit_cost
+            FROM IngredientBatch ib
+            JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
             WHERE ib.quantity_on_hand > 0
-            ORDER BY i.ingredient_name, ib.lot_number
+            ORDER BY i.name, ib.lot_number
         """
         results = self.db.execute_query(query)
         
@@ -708,19 +718,19 @@ class ManufacturerMenu:
         print("-" * 70)
         for r in results:
             print(f"{r['lot_number']:<20} {r['ingredient_name']:<25} "
-                  f"{r['quantity_on_hand']:<12.2f} {str(r['expiration_date']):<12} ${r['cost_per_unit']:<9.2f}")
+                  f"{r['quantity_on_hand']:<12.2f} {str(r['expiration_date']):<12} ${r['per_unit_cost']:<9.2f}")
     
     def report_nearly_out_of_stock(self):
         """Report nearly out of stock items"""
         query = """
-            SELECT p.product_id, p.product_name, p.standard_batch_size,
+            SELECT p.product_id, p.name AS product_name, p.standard_batch_size,
                    SUM(ib.quantity_on_hand) as total_on_hand
-            FROM Products p
-            JOIN Recipe_Plans rp ON p.product_id = rp.product_id AND rp.is_active = TRUE
-            JOIN Recipe_Ingredients ri ON rp.plan_id = ri.plan_id
-            JOIN Ingredient_Batches ib ON ri.ingredient_id = ib.ingredient_id
+            FROM Product p
+            JOIN Recipe r ON p.product_id = r.product_id AND r.is_active = TRUE
+            JOIN RecipeIngredient ri ON r.recipe_id = ri.recipe_id
+            JOIN IngredientBatch ib ON ri.ingredient_id = ib.ingredient_id
             WHERE p.manufacturer_id = %s
-            GROUP BY p.product_id, p.product_name, p.standard_batch_size
+            GROUP BY p.product_id, p.name, p.standard_batch_size
             HAVING total_on_hand < p.standard_batch_size
         """
         results = self.db.execute_query(query, (self.manufacturer_id,))
@@ -743,10 +753,10 @@ class ManufacturerMenu:
         days = int(days) if days.isdigit() else 30
         
         query = """
-            SELECT ib.lot_number, i.ingredient_name, ib.quantity_on_hand,
+            SELECT ib.lot_number, i.name AS ingredient_name, ib.quantity_on_hand,
                    ib.expiration_date, DATEDIFF(ib.expiration_date, CURDATE()) as days_remaining
-            FROM Ingredient_Batches ib
-            JOIN Ingredients i ON ib.ingredient_id = i.ingredient_id
+            FROM IngredientBatch ib
+            JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
             WHERE ib.quantity_on_hand > 0
               AND ib.expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL %s DAY)
             ORDER BY ib.expiration_date ASC
@@ -767,47 +777,48 @@ class ManufacturerMenu:
     
     def report_batch_cost(self):
         """Report batch cost summary"""
-        batch_number = input("Product Batch Number: ").strip()
+        lot_number = input("Product Batch Lot Number: ").strip()
         
         query = """
-            SELECT pb.batch_number, p.product_name, pb.quantity_produced,
-                   pb.total_cost, pb.cost_per_unit, pb.production_date
-            FROM Product_Batches pb
-            JOIN Products p ON pb.product_id = p.product_id
-            WHERE pb.batch_number = %s AND p.manufacturer_id = %s
+            SELECT pb.lot_number, p.name AS product_name, pb.produced_quantity,
+                   pb.total_batch_cost, pb.production_date
+            FROM ProductBatch pb
+            JOIN Product p ON pb.product_id = p.product_id
+            WHERE pb.lot_number = %s AND p.manufacturer_id = %s
         """
-        results = self.db.execute_query(query, (batch_number, self.manufacturer_id))
+        results = self.db.execute_query(query, (lot_number, self.manufacturer_id))
         
         if not results:
             print("✗ Batch not found or you don't have access")
             return
         
         batch = results[0]
-        print(f"\nBatch Cost Summary for {batch['batch_number']}:")
+        unit_cost = batch['total_batch_cost'] / batch['produced_quantity'] if batch['produced_quantity'] > 0 else 0
+        print(f"\nBatch Cost Summary for {batch['lot_number']}:")
         print("-" * 70)
         print(f"Product: {batch['product_name']}")
-        print(f"Quantity Produced: {batch['quantity_produced']} units")
-        print(f"Total Cost: ${batch['total_cost']:.2f}")
-        print(f"Cost per Unit: ${batch['cost_per_unit']:.2f}")
+        print(f"Quantity Produced: {batch['produced_quantity']} units")
+        print(f"Total Cost: ${batch['total_batch_cost']:.2f}")
+        print(f"Cost per Unit: ${unit_cost:.2f}")
         print(f"Production Date: {batch['production_date']}")
         
         # Show ingredient consumption
         cons_query = """
-            SELECT bc.ingredient_lot_number, i.ingredient_name, bc.quantity_used,
-                   ib.cost_per_unit, (bc.quantity_used * ib.cost_per_unit) as ingredient_cost
-            FROM Batch_Consumption bc
-            JOIN Ingredient_Batches ib ON bc.ingredient_lot_number = ib.lot_number
-            JOIN Ingredients i ON ib.ingredient_id = i.ingredient_id
-            WHERE bc.product_batch_number = %s
+            SELECT bc.ingredient_lot_number, i.name AS ingredient_name, bc.quantity_consumed,
+                   ib.per_unit_cost, (bc.quantity_consumed * ib.per_unit_cost) as ingredient_cost
+            FROM BatchConsumption bc
+            JOIN IngredientBatch ib ON bc.ingredient_lot_number = ib.lot_number
+            JOIN Ingredient i ON ib.ingredient_id = i.ingredient_id
+            WHERE bc.product_lot_number = %s
         """
-        cons_results = self.db.execute_query(cons_query, (batch_number,))
+        cons_results = self.db.execute_query(cons_query, (lot_number,))
         
         if cons_results:
             print("\nIngredient Consumption:")
             print("-" * 70)
             for c in cons_results:
                 print(f"  {c['ingredient_name']} ({c['ingredient_lot_number']}): "
-                      f"{c['quantity_used']:.2f} oz @ ${c['cost_per_unit']:.2f}/oz = ${c['ingredient_cost']:.2f}")
+                      f"{c['quantity_consumed']:.2f} oz @ ${c['per_unit_cost']:.2f}/oz = ${c['ingredient_cost']:.2f}")
     
     def recall_traceability(self):
         """Recall/Traceability (Grad feature)"""
@@ -833,5 +844,6 @@ class ManufacturerMenu:
                 print("No affected batches found")
         except:
             print("✗ TraceRecall procedure not available or error occurred")
+
 
 
