@@ -499,7 +499,7 @@ def run_manufacturer_reports(cursor, db, user_session):
 
         elif choice == '7':
             print("Report 7: Almost-Expired Ingredient Lots (Next 10 Days)")
-            # Assumes today is 2025-11-15 for test data consistency
+            # Assumes today is 2025-11-15
             query7 = """
                 SELECT 
                     lot_number AS 'Lot Number', 
@@ -666,7 +666,6 @@ def create_supplier_batch(cursor, db, user_session):
         
         db.commit()
         print("\n*** SUCCESS: Ingredient batch created! ***")
-        # The trigger 'trg_compute_ingredient_lot_number' automatically built the lot_number.
 
     except mysql.connector.Error as err:
         db.rollback()
@@ -792,7 +791,6 @@ def viewer_menu(cursor, db, user_session):
         if choice == '1':
             print("\n--- All Product Types ---")
             try:
-                # FIXED: Added 'AS' clauses to match the new pretty_print
                 query = """
                     SELECT 
                         p.product_id AS 'ID', 
@@ -805,7 +803,7 @@ def viewer_menu(cursor, db, user_session):
                     ORDER BY m.name, c.name, p.name
                 """
                 cursor.execute(query)
-                pretty_print_results(cursor) # No headers argument needed
+                pretty_print_results(cursor)
             except mysql.connector.Error as err:
                 print(f"Error: {err.msg}")
         elif choice == '2':
@@ -831,7 +829,7 @@ def main():
         DB_CONFIG['password'] = db_pass
         
         db = mysql.connector.connect(**DB_CONFIG)
-        cursor = db.cursor(dictionary=True) # dictionary=True is very helpful!
+        cursor = db.cursor(dictionary=True)
         print("Database connection successful.")
 
         user_session = login(cursor)
