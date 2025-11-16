@@ -151,6 +151,125 @@ END;
 //
 
 -- ---------------------------------------------------------------------
+-- Procedure: Evaluate Health Risk (FIXED for ERROR 1137)
+-- This procedure "flattens" a consumption list to all its
+-- atomic ingredients and checks them against the DoNotCombine table.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS Evaluate_Health_Risk;
+//
+CREATE PROCEDURE Evaluate_Health_Risk(
+    IN p_consumption_list JSON
+)
+BEGIN
+    DECLARE v_conflict_count INT DEFAULT 0;
+
+    -- 1. Create temporary tables to hold our intermediate data.
+    CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Flattened_Atomics (
+        ingredient_id VARCHAR(20) PRIMARY KEY
+    );
+    TRUNCATE TABLE Temp_Flattened_Atomics;
+
+    CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Affected_Lots (
+        lot_number VARCHAR(255) PRIMARY KEY
+    );
+    TRUNCATE TABLE Temp_Affected_Lots;
+
+    -- =================================================================
+    -- FIX FOR ERROR 1137: Create a SECOND identical temp table
+    -- =================================================================
+    CREATE TEMPORARY TABLE IF NOT EXISTS Temp_Flattened_Atomics_2 (
+        ingredient_id VARCHAR(20) PRIMARY KEY
+    );
+    TRUNCATE TABLE Temp_Flattened_Atomics_2;
+
+
+    -- 2. Get all LOTS from the JSON
+    INSERT INTO Temp_Affected_Lots (lot_number)
+    SELECT lot FROM JSON_TABLE(p_consumption_list, '$[*]' COLUMNS (
+        lot VARCHAR(255) PATH '$.lot'
+    )) AS jt;
+
+    -- 3. Get all ATOMIC ingredients from those lots and add them to our list
+    INSERT IGNORE INTO Temp_Flattened_Atomics (ingredient_id)
+    SELECT
+        ib.ingredient_id
+    FROM
+        IngredientBatch ib
+    JOIN
+        Temp_Affected_Lots al ON ib.lot_number = al.lot_number
+    JOIN
+        Ingredient i ON ib.ingredient_id = i.ingredient_id
+    WHERE
+        i.ingredient_type = 'ATOMIC';
+
+    -- 4. Get all materials from all COMPOUND ingredients and add them (the "flattening")
+    INSERT IGNORE INTO Temp_Flattened_Atomics (ingredient_id)
+    SELECT
+        fm.material_ingredient_id
+    FROM
+        IngredientBatch ib
+    JOIN
+        Temp_Affected_Lots al ON ib.lot_number = al.lot_number
+    JOIN
+        Ingredient i ON ib.ingredient_id = i.ingredient_id
+    -- Find the *active* formulation for this batch (based on intake date)
+    JOIN
+        Formulation f ON f.ingredient_id = ib.ingredient_id
+        AND f.supplier_id = ib.supplier_id
+        AND ib.intake_date BETWEEN f.valid_from_date AND COALESCE(f.valid_to_date, '9999-12-31')
+    -- Find the materials for that formulation
+    JOIN
+        FormulationMaterials fm ON fm.formulation_id = f.formulation_id
+    WHERE
+        i.ingredient_type = 'COMPOUND';
+
+    -- =================================================================
+    -- FIX FOR ERROR 1137: Copy data from t1 into t2
+    -- =================================================================
+    INSERT INTO Temp_Flattened_Atomics_2 (ingredient_id)
+    SELECT ingredient_id FROM Temp_Flattened_Atomics;
+
+
+    -- 5. Check for conflicts
+    -- We self-join our list of atomics against the DoNotCombine table
+    SELECT COUNT(*)
+    INTO v_conflict_count
+    FROM
+        Temp_Flattened_Atomics AS t1
+    JOIN
+        DoNotCombine AS dnc ON t1.ingredient_id = dnc.ingredient_a_id
+    -- =================================================================
+    -- FIX FOR ERROR 1137: Join against the *second* temp table
+    -- =================================================================
+    JOIN
+        Temp_Flattened_Atomics_2 AS t2 ON dnc.ingredient_b_id = t2.ingredient_id;
+    
+    -- We also check the reverse pair (B -> A)
+    SET v_conflict_count = v_conflict_count + (
+        SELECT COUNT(*)
+        FROM
+            Temp_Flattened_Atomics AS t1
+        JOIN
+            DoNotCombine AS dnc ON t1.ingredient_id = dnc.ingredient_b_id
+        -- =================================================================
+        -- FIX FOR ERROR 1137: Join against the *second* temp table
+        -- =================================================================
+        JOIN
+            Temp_Flattened_Atomics_2 AS t2 ON dnc.ingredient_a_id = t2.ingredient_id
+    );
+
+    -- 6. Block or Allow
+    IF v_conflict_count > 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'ERROR: Health risk detected! Incompatible ingredients found in batch.';
+    END IF;
+    -- If count is 0, the procedure finishes successfully.
+    -- Temporary tables are dropped automatically when the session ends.
+
+END;
+//
+
+-- ---------------------------------------------------------------------
 -- Procedure: Record Production Batch
 -- This is the main "engine" of the application. It atomically
 -- creates a new product batch and consumes all specified ingredients.
@@ -242,5 +361,42 @@ BEGIN
 END;
 //
 
+-- ---------------------------------------------------------------------
+-- Procedure: Trace Recall
+-- This procedure finds all product batches affected by a
+-- specific recalled ingredient lot, within a 20-day window.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS Trace_Recall;
+//
+CREATE PROCEDURE Trace_Recall(
+    IN p_ingredient_lot_number VARCHAR(255), -- The lot ID to recall
+    IN p_recall_date DATE                    -- The date the recall was issued
+)
+BEGIN
+    -- This query joins the consumption link to the batch and product tables.
+    SELECT
+        pb.lot_number AS affected_product_lot,
+        p.name AS product_name,
+        pb.production_date,
+        pb.expiration_date,
+        pb.produced_quantity
+    FROM
+        BatchConsumption AS bc
+    JOIN
+        ProductBatch AS pb ON bc.product_lot_number = pb.lot_number
+    JOIN
+        Product AS p ON pb.product_id = p.product_id
+    WHERE
+        -- 1. Find the specific recalled ingredient lot
+        bc.ingredient_lot_number = p_ingredient_lot_number
+        
+        -- 2. Filter by the 20-day time window
+        -- We check if the production_date (a DATETIME) is between
+        -- 20 days *before* the recall date and the recall date itself.
+        AND DATE(pb.production_date) 
+            BETWEEN (p_recall_date - INTERVAL 20 DAY) AND p_recall_date;
+
+END;
+//
 
 DELIMITER ;

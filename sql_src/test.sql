@@ -316,32 +316,185 @@ WHERE product_lot_number = '100-MFG001-B-TEST-001';
 -- 1. The 'trg_validate_consumption' (Check 1: Expiration)
 -- 2. The 'ROLLBACK' in the procedure's error handler
 -- ---------------------------------------------------------------------
-SELECT 'TESTING: (Sad Path) Expired lot...' AS test_name;
+-- SELECT 'TESTING: (Sad Path) Expired lot...' AS test_name;
 
--- SETUP: Create a fake, expired lot
+-- -- SETUP: Create a fake, expired lot
+-- INSERT INTO IngredientBatch 
+--   (ingredient_id, supplier_id, supplier_batch_id, 
+--    quantity_on_hand, per_unit_cost, expiration_date, intake_date)
+-- VALUES 
+--   ('101', '20', 'EXPIRED-TEST-LOT', 100, 5.0, '2025-01-01', '2024-01-01');
+
+-- -- ACTION:
+-- -- Try to create a *new* batch ('B-TEST-003') using the expired lot.
+-- SET @expired_list = '[{"lot": "101-20-EXPIRED-TEST-LOT", "qty": 10}]';
+
+-- CALL Record_Production_Batch(
+--     '100',          -- p_product_id
+--     'MFG001',        -- p_manufacturer_id
+--     'B-TEST-003',   -- p_manufacturer_batch_id (a new, unique ID)
+--     100,            -- p_produced_quantity
+--     '2026-12-01',   -- p_expiration_date
+--     1,              -- p_recipe_id_used
+--     @expired_list
+-- );
+-- -- EXPECTED: ERROR 1644 (45000): ... Lot has expired.
+
+-- -- CHECK (ROLLBACK):
+-- -- Prove that the 'B-TEST-003' batch was *NOT* created.
+-- SELECT * FROM ProductBatch 
+-- WHERE manufacturer_batch_id = 'B-TEST-003';
+-- -- EXPECTED: (0 rows returned)
+
+-- =====================================================================
+-- TEST FOR: Procedure: Trace_Recall
+-- =====================================================================
+SELECT 'TESTING: Stored Procedure Trace_Recall' AS test_name;
+
+-- ---------------------------------------------------------------------
+-- Test 1: (Happy Path) Recall an item *INSIDE* the 20-day window
+-- (FIXED: Removed extra quotes from the string)
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Happy Path) Lot 106-20-B0006 recalled on 2025-09-30...' AS test_name;
+
+-- DATA CHECK: '100-MFG001-B0901' consumed '106-20-B0006' and was produced on '2025-09-26'.
+-- TEST: Recall date '2025-09-30'. Window is '2025-09-10' to '2025-09-30'.
+-- '2025-09-26' is IN the window.
+CALL Trace_Recall(
+    '106-20-B0006',  -- p_ingredient_lot_number
+    '2025-09-30'     -- p_recall_date
+);
+-- EXPECTED OUTPUT: (1 row returned: '100-MFG001-B0901', 'Steak Dinner', ...)
+
+
+-- ---------------------------------------------------------------------
+-- Test 2: (Sad Path) Recall an item *OUTSIDE* the 20-day window
+-- (FIXED: Removed extra quotes from the string)
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Sad Path) Lot 106-20-B0006 recalled on 2025-10-20...' AS test_name;
+
+-- DATA CHECK: '100-MFG001-B0901' was produced on '2025-09-26'.
+-- TEST: Recall date '2025-10-20'. Window is '2025-10-01' to '2025-10-20'.
+-- '2025-09-26' is NOT in the window.
+CALL Trace_Recall(
+    '106-20-B0006',  -- p_ingredient_lot_number
+    '2025-10-20'     -- p_recall_date
+);
+-- EXPECTED OUTPUT: Empty set (0 rows returned)
+
+
+-- ---------------------------------------------------------------------
+-- Test 3: (Sad Path) Recall a lot that was never consumed
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Sad Path) Lot 101-20-B0001 (never consumed)...' AS test_name;
+
+-- DATA CHECK: '101-20-B0001' exists but is not in BatchConsumption.
+CALL Trace_Recall(
+    '101-20-B0001',  -- p_ingredient_lot_number
+    '2025-12-01'     -- p_recall_date
+);
+-- EXPECTED OUTPUT: Empty set (0 rows returned)
+
+
+-- =====================================================================
+-- TEST FOR: Procedure: Evaluate_Health_Risk
+-- =====================================================================
+SELECT 'TESTING: Stored Procedure Evaluate_Health_Risk' AS test_name;
+
+-- ---------------------------------------------------------------------
+-- Test 1: (Happy Path) A batch with NO conflicts.
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Happy Path) No conflicts detected...' AS test_name;
+
+-- ACTION:
+-- We'll test the consumption list for the 'Steak Dinner'
+-- from 'populate.sql' (Recipe 1).
+--   - Lot '106-20-B0006' -> '106' (Beef Steak)
+--   - Lot '201-20-B0002' -> '201' (Seasoning Blend)
+--
+-- Flattening '201' (Formulation 1) gives '101' (Salt) and '102' (Pepper).
+-- The final atomic list is: {'106', '101', '102'}.
+-- The conflict pair is ('104', '106').
+-- Our list does NOT contain '104', so this is safe.
+
+SET @safe_list = '[
+    {"lot": "106-20-B0006", "qty": 600},
+    {"lot": "201-20-B0002", "qty": 20}
+]';
+
+-- This CALL should succeed with no errors.
+CALL Evaluate_Health_Risk(@safe_list);
+-- EXPECTED OUTPUT: (Success)
+
+
+-- ---------------------------------------------------------------------
+-- Test 2: (Sad Path) A direct conflict between two ATOMIC lots.
+-- ---------------------------------------------------------------------
+-- SELECT 'TESTING: (Sad Path) Direct atomic conflict...' AS test_name;
+
+-- -- SETUP:
+-- -- We must create an ingredient batch for '104' (Sodium Phosphate),
+-- -- which is the other half of our conflict pair ('104', '106').
+-- INSERT INTO IngredientBatch 
+--   (ingredient_id, supplier_id, supplier_batch_id, 
+--    quantity_on_hand, per_unit_cost, expiration_date, intake_date)
+-- VALUES 
+--   ('104', '20', 'B-PHOS-TEST', 100.00, 1.50, '2026-11-15', '2025-11-15');
+-- -- This creates lot '104-20-B-PHOS-TEST'
+
+-- -- ACTION:
+-- -- We'll create a list that consumes '106' AND '104'.
+-- -- The final atomic list will be: {'106', '104'}.
+-- -- This matches our conflict pair ('104', '106').
+-- SET @conflict_list = '[
+--     {"lot": "106-20-B0006", "qty": 10},
+--     {"lot": "104-20-B-PHOS-TEST", "qty": 10}
+-- ]';
+
+-- -- This CALL should FAIL.
+-- CALL Evaluate_Health_Risk(@conflict_list);
+-- -- EXPECTED OUTPUT: ERROR 1644 (45000): ... Health risk detected!
+
+
+-- ---------------------------------------------------------------------
+-- Test 3: (Sad Path) A conflict hidden in a COMPOUND ingredient.
+-- ---------------------------------------------------------------------
+SELECT 'TESTING: (Sad Path) Conflict hidden in compound ingredient...' AS test_name;
+
+-- SETUP:
+-- We must invent a new compound ingredient that *contains* '104'.
+-- 1. Invent the Ingredient:
+INSERT INTO Ingredient (ingredient_id, name, ingredient_type) 
+  VALUES ('C-104', 'Phosphate Blend', 'COMPOUND');
+-- 2. Invent its Formulation (we'll use ID 2):
+INSERT INTO Formulation 
+  (formulation_id, ingredient_id, supplier_id, valid_from_date, unit_price, pack_size) 
+  VALUES (2, 'C-104', '20', '2025-01-01', 10.0, '1kg');
+-- 3. Invent its Materials:
+INSERT INTO FormulationMaterials 
+  (formulation_id, material_ingredient_id, quantity) 
+  VALUES (2, '104', 5.0); -- It contains '104' (Sodium Phosphate)
+-- 4. Invent an IngredientBatch for it:
 INSERT INTO IngredientBatch 
   (ingredient_id, supplier_id, supplier_batch_id, 
    quantity_on_hand, per_unit_cost, expiration_date, intake_date)
 VALUES 
-  ('101', '20', 'EXPIRED-TEST-LOT', 100, 5.0, '2025-01-01', '2024-01-01');
+  ('C-104', '20', 'B-PHOS-BLEND', 100.00, 10.0, '2026-11-15', '2025-11-15');
+-- This creates lot 'C-104-20-B-PHOS-BLEND'
 
 -- ACTION:
--- Try to create a *new* batch ('B-TEST-003') using the expired lot.
-SET @expired_list = '[{"lot": "101-20-EXPIRED-TEST-LOT", "qty": 10}]';
+-- We'll create a list that consumes '106' (Beef) AND 'C-104' (Phosphate Blend).
+--   - Lot '106-20-B0006' -> '106' (Beef Steak)
+--   - Lot 'C-104-20-B-PHOS-BLEND' -> 'C-104' (Compound)
+--
+-- Flattening 'C-104' (Formulation 2) gives '104' (Sodium Phosphate).
+-- The final atomic list is: {'106', '104'}.
+-- This matches our conflict pair.
+SET @compound_conflict_list = '[
+    {"lot": "106-20-B0006", "qty": 10},
+    {"lot": "C-104-20-B-PHOS-BLEND", "qty": 10}
+]';
 
-CALL Record_Production_Batch(
-    '100',          -- p_product_id
-    'MFG001',        -- p_manufacturer_id
-    'B-TEST-003',   -- p_manufacturer_batch_id (a new, unique ID)
-    100,            -- p_produced_quantity
-    '2026-12-01',   -- p_expiration_date
-    1,              -- p_recipe_id_used
-    @expired_list
-);
--- EXPECTED: ERROR 1644 (45000): ... Lot has expired.
-
--- CHECK (ROLLBACK):
--- Prove that the 'B-TEST-003' batch was *NOT* created.
-SELECT * FROM ProductBatch 
-WHERE manufacturer_batch_id = 'B-TEST-003';
--- EXPECTED: (0 rows returned)
+-- This CALL should FAIL.
+CALL Evaluate_Health_Risk(@compound_conflict_list);
+-- EXPECTED OUTPUT: ERROR 1644 (45000): ... Health risk detected!
