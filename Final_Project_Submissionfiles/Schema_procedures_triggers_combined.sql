@@ -195,7 +195,6 @@ DROP TRIGGER IF EXISTS trg_maintain_on_hand_ADJUST;
 DROP PROCEDURE IF EXISTS Evaluate_Health_Risk;
 DROP PROCEDURE IF EXISTS Record_Production_Batch;
 DROP PROCEDURE IF EXISTS Trace_Recall;
-trg_compute_ingredient_lot_number
 
 -- ============================================
 -- Compute Ingredient Lot Trigger
